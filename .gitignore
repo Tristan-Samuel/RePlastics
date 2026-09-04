@@ -1,0 +1,22 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+
+# Dataset (images are not committed)
+data/
+
+# Model checkpoints
+*.pt
+models/
+
+# Local / OS
+.DS_Store
+.cursor/
+*.code-workspace
+
+# Archives
+*.zip
