@@ -132,7 +132,9 @@ chmod +x colab_train.sh
 ./colab_train.sh --resume --unfreeze fc --data-dir data_real --epochs 8
 ```
 
-The first run prints a Google sign-in URL. Paste the code back into the terminal. After that, the same command can be run from here without copying cells into Jupyter.
+The first run prints a Google sign-in URL. Open it, approve access, then paste the **authorization code** (not the URL) back into the terminal. On the consent screen, allow every requested permission if Google shows them (Colab, Drive, Cloud). After that, the same command can be run from here without copying cells into Jupyter.
+
+If login fails with `Scope has changed`, re-run the command. The helper treats a reduced Google grant as a warning instead of crashing. You should not need to paste a code again once `~/.config/colab-cli/token.json` exists.
 
 The helper zips `train.py`, `trashnet.py`, the dataset directory, and (if `--resume`) the checkpoint; installs `requirements-colab.txt` on the VM (PyTorch is already on Colab); then pulls back `models/resnext50_metal_plastic.pt` and the confusion-matrix artifacts. The VM is stopped when the script exits unless you pass `--keep`.
 

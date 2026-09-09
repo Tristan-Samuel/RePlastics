@@ -7,6 +7,10 @@
 #   ./colab_train.sh --gpu L4 --keep -- --resume --unfreeze layer4
 set -euo pipefail
 
+# Google often grants only profile/email for this OAuth client.
+# Without this, oauthlib raises "Scope has changed" and login dies.
+export OAUTHLIB_RELAX_TOKEN_SCOPE=1
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
