@@ -1,3 +1,4 @@
+import argparse
 import random
 from pathlib import Path
 
@@ -13,12 +14,53 @@ from torchvision.models import (
 
 from trashnet import (
     EXPECTED_CLASSES,
-    TEST_DIR,
     assert_split_layout,
+    split_dirs_for,
 )
 
 
-MODEL_PATH = "resnext50_metal_plastic.pt"
+DEFAULT_MODEL_PATH = Path("models/resnext50_metal_plastic.pt")
+LEGACY_MODEL_PATH = Path("resnext50_metal_plastic.pt")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Show predictions on random test images."
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("data"),
+        help=(
+            "Dataset root with train/validation/test "
+            "class folders."
+        ),
+    )
+    parser.add_argument(
+        "--model",
+        type=Path,
+        default=None,
+        help=(
+            "Checkpoint path. Defaults to "
+            "models/resnext50_metal_plastic.pt, then "
+            "resnext50_metal_plastic.pt in the current "
+            "directory."
+        ),
+    )
+    return parser.parse_args()
+
+
+args = parse_args()
+
+if args.model is not None:
+    MODEL_PATH = args.model
+elif DEFAULT_MODEL_PATH.exists():
+    MODEL_PATH = DEFAULT_MODEL_PATH
+elif LEGACY_MODEL_PATH.exists():
+    MODEL_PATH = LEGACY_MODEL_PATH
+else:
+    MODEL_PATH = DEFAULT_MODEL_PATH
+
 DISPLAY_COUNT = 9
 CELL_SIZE = 360
 
@@ -146,7 +188,8 @@ model.eval()
 # Random test images
 # ---------------------------------------------------------
 
-assert_split_layout()
+assert_split_layout(args.data_dir)
+test_dir = split_dirs_for(args.data_dir)["test"]
 
 weights = ResNeXt50_32X4D_Weights.DEFAULT
 preprocess = weights.transforms()
@@ -154,14 +197,14 @@ preprocess = weights.transforms()
 test_paths = [
     path
     for class_name in EXPECTED_CLASSES
-    for path in sorted((TEST_DIR / class_name).iterdir())
+    for path in sorted((test_dir / class_name).iterdir())
     if path.is_file()
     and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
 ]
 
 if not test_paths:
     raise FileNotFoundError(
-        f"No test images found in {TEST_DIR}."
+        f"No test images found in {test_dir}."
     )
 
 sample_count = min(DISPLAY_COUNT, len(test_paths))

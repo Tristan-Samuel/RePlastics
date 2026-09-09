@@ -8,6 +8,11 @@ __pycache__/
 
 # Dataset (images are not committed)
 data/
+data_real/
+
+# Colab helper temp files
+.colab_bundle.zip
+.colab_run.py
 
 # Model checkpoints
 *.pt

@@ -8,15 +8,32 @@ VALIDATION_DIR = DATA_DIR / "validation"
 TEST_DIR = DATA_DIR / "test"
 
 EXPECTED_CLASSES = ["metal", "plastic"]
-SPLIT_DIRS = {
-    "train": TRAIN_DIR,
-    "validation": VALIDATION_DIR,
-    "test": TEST_DIR,
-}
 
 
-def assert_split_layout():
-    for split_name, split_dir in SPLIT_DIRS.items():
+def split_dirs_for(data_dir=DATA_DIR):
+    data_dir = Path(data_dir)
+    return {
+        "train": data_dir / "train",
+        "validation": data_dir / "validation",
+        "test": data_dir / "test",
+    }
+
+
+SPLIT_DIRS = split_dirs_for(DATA_DIR)
+
+
+def ensure_split_layout(data_dir=None):
+    data_dir = Path(data_dir) if data_dir is not None else DATA_DIR
+
+    for split_name, split_dir in split_dirs_for(data_dir).items():
+        for class_name in EXPECTED_CLASSES:
+            (split_dir / class_name).mkdir(parents=True, exist_ok=True)
+
+
+def assert_split_layout(data_dir=None):
+    data_dir = Path(data_dir) if data_dir is not None else DATA_DIR
+
+    for split_name, split_dir in split_dirs_for(data_dir).items():
         if not split_dir.is_dir():
             raise FileNotFoundError(
                 f"Missing {split_dir}. "
