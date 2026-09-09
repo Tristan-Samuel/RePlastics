@@ -180,7 +180,7 @@ print(f"Wrote {bundle}")
 PY
 
 if [[ ${#TRAIN_ARGS[@]} -gt 0 ]]; then
-    ARGS_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' -- "${TRAIN_ARGS[@]}")"
+    ARGS_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[2:]))' -- "${TRAIN_ARGS[@]}")"
 else
     ARGS_JSON='[]'
 fi
@@ -217,7 +217,9 @@ cleanup() {
 
 trap cleanup EXIT
 
-if colab status -s "$SESSION" >/dev/null 2>&1; then
+echo "Checking Colab session '$SESSION' on $GPU..."
+echo "First run prints a Google sign-in URL. Open it, then paste the authorization code (not the URL)."
+if colab status -s "$SESSION"; then
     echo "Reusing existing Colab session $SESSION"
 else
     echo "Starting Colab session $SESSION on $GPU"
