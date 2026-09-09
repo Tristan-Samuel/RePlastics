@@ -21,10 +21,10 @@ KEEP=0
 TIMEOUT="${COLAB_TIMEOUT:-21600}"
 DATA_DIR=""
 USE_DRIVE=0
-DRIVE_DIR="${COLAB_DRIVE_DIR:-Subsystem_3/dataset/stage1_binary_v2}"
+DRIVE_DIR="${COLAB_DRIVE_DIR:-stage1_binary_v2}"
 TRAIN_ARGS=()
 PHASE=start
-ONE_SHOT_UPLOAD_MAX=$((100 * 1024 * 1024))
+ONE_SHOT_UPLOAD_MAX=$((8 * 1024 * 1024))
 
 usage() {
     cat <<'EOF'
@@ -36,7 +36,7 @@ Helper flags:
   --keep             Leave the VM running after training
   --timeout SECONDS  colab exec timeout (default: 21600)
   --drive            Mount Google Drive instead of uploading images
-  --drive-dir PATH   Folder under MyDrive (default: Subsystem_3/dataset/stage1_binary_v2)
+  --drive-dir PATH   Folder under MyDrive (default: stage1_binary_v2)
   --data-dir DIR     Local dataset root to upload (ignored with --drive)
   -h, --help         Show this help
 
@@ -154,16 +154,25 @@ if [[ ${#TRAIN_ARGS[@]} -gt 0 ]]; then
 fi
 
 ensure_colab_cli() {
-    if command -v colab >/dev/null 2>&1; then
-        return
+    if ! command -v colab >/dev/null 2>&1; then
+        echo "google-colab-cli is not installed. Installing..."
+
+        if command -v uv >/dev/null 2>&1; then
+            uv tool install google-colab-cli
+        else
+            python3 -m pip install google-colab-cli
+        fi
     fi
 
-    echo "google-colab-cli is not installed. Installing..."
-
-    if command -v uv >/dev/null 2>&1; then
-        uv tool install google-colab-cli
-    else
-        python3 -m pip install google-colab-cli
+    COLAB_BIN="$(command -v colab)"
+    COLAB_PY="$(head -1 "$COLAB_BIN" | tr -d '#!')"
+    if ! "$COLAB_PY" -c "from jupyter_kernel_client import KernelClient" >/dev/null 2>&1; then
+        echo "Pinning jupyter-kernel-client==0.15.0 so colab exec works..."
+        if command -v uv >/dev/null 2>&1; then
+            uv pip install --python "$COLAB_PY" "jupyter-kernel-client==0.15.0"
+        else
+            "$COLAB_PY" -m pip install "jupyter-kernel-client==0.15.0"
+        fi
     fi
 }
 
@@ -173,18 +182,21 @@ BUNDLE="$ROOT/.colab_bundle.zip"
 RUN_FILE="$ROOT/.colab_run.py"
 EXTRACT_FILE="$ROOT/.colab_extract.py"
 PREPARE_FILE="$ROOT/.colab_prepare.py"
-rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE"
+CHECKPOINT_FILE="$ROOT/.colab_checkpoint.py"
+rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE"
 
 if [[ "$USE_DRIVE" -eq 1 ]]; then
     echo "Packing training scripts only. Images will come from Google Drive ($DRIVE_DIR)."
     PACK_DATA=""
+    ZIP_RESUME=0
 else
     DATA_SIZE="$(du -sh "$DATA_DIR" | cut -f1)"
     echo "Packing $DATA_DIR ($DATA_SIZE) plus train.py into a Colab zip. This can take a minute with no upload yet..."
     PACK_DATA="$DATA_DIR"
+    ZIP_RESUME="$RESUME"
 fi
 
-python3 - "$BUNDLE" "$PACK_DATA" "$RESUME" "$MODEL_PATH" <<'PY'
+python3 - "$BUNDLE" "$PACK_DATA" "$ZIP_RESUME" "$MODEL_PATH" <<'PY'
 from pathlib import Path
 import sys
 import zipfile
@@ -294,6 +306,37 @@ prepare_file.write_text(
 print(f"Wrote {prepare_file} for {source}")
 PY
 
+python3 - "$CHECKPOINT_FILE" <<'PY'
+from pathlib import Path
+import sys
+
+Path(sys.argv[1]).write_text(
+    "import shutil\n"
+    "from pathlib import Path\n"
+    "dest = Path('/content/models/resnext50_metal_plastic.pt')\n"
+    "if dest.exists():\n"
+    "    print('Using checkpoint already on the VM', dest, flush=True)\n"
+    "else:\n"
+    "    dest.parent.mkdir(parents=True, exist_ok=True)\n"
+    "    candidates = [\n"
+    "        Path('/content/drive/MyDrive/metal-plastic-sorting/resnext50_metal_plastic.pt'),\n"
+    "        Path('/content/drive/MyDrive/stage1_binary_v2/resnext50_metal_plastic.pt'),\n"
+    "    ]\n"
+    "    for src in candidates:\n"
+    "        if src.is_file():\n"
+    "            shutil.copy2(src, dest)\n"
+    "            print('Copied checkpoint from', src, flush=True)\n"
+    "            break\n"
+    "    else:\n"
+    "        raise SystemExit(\n"
+    "            'Missing checkpoint. Copy models/resnext50_metal_plastic.pt '\n"
+    "            'to MyDrive/metal-plastic-sorting/ and re-run.'\n"
+    "        )\n",
+    encoding="utf-8",
+)
+print("Wrote", sys.argv[1])
+PY
+
 cat > "$EXTRACT_FILE" <<'PY'
 import zipfile
 from pathlib import Path
@@ -301,6 +344,12 @@ from pathlib import Path
 content = Path("/content")
 parts = sorted(content.glob("colab_bundle.part.*"))
 bundle = content / "colab_bundle.zip"
+
+if bundle.exists() and parts:
+    print("Ignoring leftover upload parts; using colab_bundle.zip", flush=True)
+    for part in parts:
+        part.unlink()
+    parts = []
 
 if parts:
     print("Joining %s upload parts..." % len(parts), flush=True)
@@ -325,7 +374,7 @@ print("Extracted %s files into /content" % len(names), flush=True)
 PY
 
 cleanup() {
-    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE"
+    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE"
     if [[ "${KEEP:-0}" -eq 1 ]]; then
         echo "Leaving session $SESSION running (--keep)"
         return
@@ -398,7 +447,31 @@ upload_bundle() {
     python3 colab_upload.py "$SESSION" "$BUNDLE" colab_bundle.part
 }
 
+stage_checkpoint_on_drive() {
+    local my_drive dest
+    [[ "$RESUME" -eq 1 ]] || return 0
+    [[ -f "$MODEL_PATH" ]] || return 0
+
+    for my_drive in "$HOME/Library/CloudStorage"/GoogleDrive-*/"My Drive"; do
+        if [[ -d "$my_drive" ]]; then
+            dest="$my_drive/metal-plastic-sorting/resnext50_metal_plastic.pt"
+            mkdir -p "$(dirname "$dest")"
+            if [[ -f "$dest" ]]; then
+                echo "Checkpoint already on Google Drive at metal-plastic-sorting/"
+                return 0
+            fi
+            echo "Copying checkpoint to Google Drive (once). Colab will read it from there."
+            cp "$MODEL_PATH" "$dest"
+            return 0
+        fi
+    done
+}
+
 trap cleanup EXIT
+
+if [[ "$USE_DRIVE" -eq 1 && "$RESUME" -eq 1 ]]; then
+    stage_checkpoint_on_drive
+fi
 
 echo "Checking Colab session '$SESSION' on $GPU..."
 echo "First run prints a Google sign-in URL. Open it, then paste the authorization code (not the URL)."
@@ -411,7 +484,13 @@ else
     sleep 5
 fi
 
-if vm_has 'train.py'; then
+if [[ "$USE_DRIVE" -eq 1 ]]; then
+    echo "Uploading training scripts (photos and checkpoint stay on Drive)"
+    upload_bundle
+    PHASE=uploaded
+    echo "Extracting training scripts on the VM"
+    colab_exec 120 "$EXTRACT_FILE"
+elif vm_has 'train.py'; then
     echo "Training scripts already on the VM; skipping upload."
     PHASE=uploaded
 elif vm_has 'colab_bundle'; then
@@ -423,11 +502,7 @@ elif vm_has 'colab_bundle'; then
         colab_exec 120 "$EXTRACT_FILE"
     fi
 else
-    if [[ "$USE_DRIVE" -eq 1 ]]; then
-        echo "Uploading training scripts and checkpoint (photos stay on Drive)"
-    else
-        echo "Uploading local dataset (this is the slow path; prefer --drive)"
-    fi
+    echo "Uploading local dataset (this is the slow path; prefer --drive)"
     upload_bundle
     PHASE=uploaded
     echo "Extracting training bundle on the VM"
@@ -439,6 +514,10 @@ if [[ "$USE_DRIVE" -eq 1 ]]; then
     colab drivemount -s "$SESSION"
     echo "Linking Drive photos into train/validation/test (NonPlastic -> metal, Plastic -> plastic)"
     colab_exec 600 "$PREPARE_FILE"
+    if [[ "$RESUME" -eq 1 ]]; then
+        echo "Copying checkpoint from Drive onto the VM"
+        colab_exec 120 "$CHECKPOINT_FILE"
+    fi
 fi
 
 echo "Installing Python packages (Colab already has CUDA PyTorch)"

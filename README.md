@@ -132,7 +132,7 @@ chmod +x colab_train.sh
 ./colab_train.sh --drive --resume --unfreeze fc --epochs 8
 ```
 
-That mounts Google Drive instead of uploading photos. Default folder is `MyDrive/Subsystem_3/dataset/stage1_binary_v2`, which should contain `train/NonPlastic` and `train/Plastic`. Those names are mapped to **metal** and **plastic**, then split 70% / 15% / 15% on the VM. Originals are not moved. Override the folder with `--drive-dir`.
+That mounts Google Drive instead of uploading photos. Default folder is `MyDrive/stage1_binary_v2`, which should contain `train/NonPlastic` and `train/Plastic`. Those names are mapped to **metal** and **plastic**. If Drive already has `val/`, that split is kept and 15% of train is held out as test. Originals are not moved. Override the folder with `--drive-dir`.
 
 To upload a local `data_real` tree instead:
 
