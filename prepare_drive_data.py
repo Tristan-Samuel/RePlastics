@@ -55,7 +55,7 @@ def parse_args():
         help=(
             "Drive dataset root, e.g. "
             "/content/drive/MyDrive/Subsystem_3/"
-            "dataset/stage1_binary"
+            "dataset/stage1_binary_v2"
         ),
     )
     parser.add_argument(

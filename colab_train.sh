@@ -21,7 +21,7 @@ KEEP=0
 TIMEOUT="${COLAB_TIMEOUT:-21600}"
 DATA_DIR=""
 USE_DRIVE=0
-DRIVE_DIR="${COLAB_DRIVE_DIR:-Subsystem_3/dataset/stage1_binary}"
+DRIVE_DIR="${COLAB_DRIVE_DIR:-Subsystem_3/dataset/stage1_binary_v2}"
 TRAIN_ARGS=()
 
 usage() {
@@ -34,7 +34,7 @@ Helper flags:
   --keep             Leave the VM running after training
   --timeout SECONDS  colab exec timeout (default: 21600)
   --drive            Mount Google Drive instead of uploading images
-  --drive-dir PATH   Folder under MyDrive (default: Subsystem_3/dataset/stage1_binary)
+  --drive-dir PATH   Folder under MyDrive (default: Subsystem_3/dataset/stage1_binary_v2)
   --data-dir DIR     Local dataset root to upload (ignored with --drive)
   -h, --help         Show this help
 
