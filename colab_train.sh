@@ -135,6 +135,9 @@ BUNDLE="$ROOT/.colab_bundle.zip"
 RUN_FILE="$ROOT/.colab_run.py"
 rm -f "$BUNDLE" "$RUN_FILE"
 
+DATA_SIZE="$(du -sh "$DATA_DIR" | cut -f1)"
+echo "Packing $DATA_DIR ($DATA_SIZE) plus train.py into a Colab zip. This can take a minute with no upload yet..."
+
 python3 - "$BUNDLE" "$DATA_DIR" "$RESUME" "$MODEL_PATH" <<'PY'
 from pathlib import Path
 import sys
@@ -145,19 +148,29 @@ data_dir = Path(data_dir)
 model_path = Path(model_path)
 skip = {"__pycache__", ".DS_Store"}
 
-with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
+def log(message):
+    print(message, flush=True)
+
+if not data_dir.is_dir():
+    raise SystemExit(f"Missing dataset directory: {data_dir}")
+
+files = [
+    path
+    for path in data_dir.rglob("*")
+    if path.is_file()
+    and path.name not in skip
+    and "__pycache__" not in path.parts
+]
+log(f"Zipping {len(files)} files from {data_dir}...")
+
+with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as archive:
     for name in ("train.py", "trashnet.py"):
         archive.write(name)
 
-    if not data_dir.is_dir():
-        raise SystemExit(f"Missing dataset directory: {data_dir}")
-
-    for path in data_dir.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.name in skip or "__pycache__" in path.parts:
-            continue
+    for index, path in enumerate(files, start=1):
         archive.write(path, path.as_posix())
+        if index == 1 or index == len(files) or index % 50 == 0:
+            log(f"  {index}/{len(files)} files")
 
     if resume == "1":
         source = model_path
@@ -174,9 +187,9 @@ with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
             )
 
         archive.write(source, Path(model_path).as_posix())
-        print(f"Bundled checkpoint {source} as {model_path}")
+        log(f"Bundled checkpoint {source} as {model_path}")
 
-print(f"Wrote {bundle}")
+log(f"Wrote {bundle}")
 PY
 
 if [[ ${#TRAIN_ARGS[@]} -gt 0 ]]; then
