@@ -235,7 +235,7 @@ PY
 cleanup() {
     rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE"
     if [[ "${KEEP:-0}" -eq 0 ]]; then
-        if command -v colab >/dev/null 2>&1 && colab status -s "$SESSION" >/dev/null 2>&1; then
+        if command -v colab >/dev/null 2>&1 && colab_session_is_up; then
             echo "Stopping session $SESSION"
             colab stop -s "$SESSION" || true
         fi
@@ -254,11 +254,21 @@ download_if_present() {
     fi
 }
 
+# colab status prints "not found" but still exits 0.
+colab_session_is_up() {
+    local output
+    output="$(colab status -s "$SESSION" 2>&1)" || true
+    if [[ "${1:-}" == "print" ]]; then
+        printf '%s\n' "$output"
+    fi
+    printf '%s\n' "$output" | grep -Eq 'IDLE|BUSY|READY'
+}
+
 trap cleanup EXIT
 
 echo "Checking Colab session '$SESSION' on $GPU..."
 echo "First run prints a Google sign-in URL. Open it, then paste the authorization code (not the URL)."
-if colab status -s "$SESSION"; then
+if colab_session_is_up print; then
     echo "Reusing existing Colab session $SESSION"
 else
     echo "Starting Colab session $SESSION on $GPU"
