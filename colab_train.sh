@@ -3,6 +3,7 @@
 # and download the checkpoint. Default GPU is T4; override with --gpu or
 # COLAB_GPU. Extra arguments are forwarded to train.py.
 #
+#   ./colab_train.sh --drive --resume --unfreeze fc --epochs 8
 #   ./colab_train.sh --resume --unfreeze fc --data-dir data_real --epochs 8
 #   ./colab_train.sh --gpu L4 --keep -- --resume --unfreeze layer4
 set -euo pipefail
@@ -19,6 +20,8 @@ SESSION="${COLAB_SESSION:-trainer}"
 KEEP=0
 TIMEOUT="${COLAB_TIMEOUT:-21600}"
 DATA_DIR=""
+USE_DRIVE=0
+DRIVE_DIR="${COLAB_DRIVE_DIR:-Subsystem_3/dataset/stage1_binary}"
 TRAIN_ARGS=()
 
 usage() {
@@ -30,7 +33,9 @@ Helper flags:
   --session NAME     Session name (default: trainer, or $COLAB_SESSION)
   --keep             Leave the VM running after training
   --timeout SECONDS  colab exec timeout (default: 21600)
-  --data-dir DIR     Dataset root to upload (also passed to train.py)
+  --drive            Mount Google Drive instead of uploading images
+  --drive-dir PATH   Folder under MyDrive (default: Subsystem_3/dataset/stage1_binary)
+  --data-dir DIR     Local dataset root to upload (ignored with --drive)
   -h, --help         Show this help
 
 All other flags are forwarded to train.py.
@@ -59,6 +64,15 @@ while [[ $# -gt 0 ]]; do
             TIMEOUT="$2"
             shift 2
             ;;
+        --drive)
+            USE_DRIVE=1
+            shift
+            ;;
+        --drive-dir)
+            DRIVE_DIR="$2"
+            USE_DRIVE=1
+            shift 2
+            ;;
         --data-dir)
             DATA_DIR="$2"
             TRAIN_ARGS+=(--data-dir "$2")
@@ -85,7 +99,29 @@ if [[ -z "$DATA_DIR" && ${#TRAIN_ARGS[@]} -gt 0 ]]; then
     done
 fi
 
-if [[ -z "$DATA_DIR" ]]; then
+if [[ "$USE_DRIVE" -eq 1 ]]; then
+    FILTERED_ARGS=()
+    SKIP_VALUE=0
+    if [[ ${#TRAIN_ARGS[@]} -gt 0 ]]; then
+        for arg in "${TRAIN_ARGS[@]}"; do
+            if [[ "$SKIP_VALUE" -eq 1 ]]; then
+                SKIP_VALUE=0
+                continue
+            fi
+            if [[ "$arg" == "--data-dir" ]]; then
+                SKIP_VALUE=1
+                continue
+            fi
+            FILTERED_ARGS+=("$arg")
+        done
+    fi
+    TRAIN_ARGS=()
+    if [[ ${#FILTERED_ARGS[@]} -gt 0 ]]; then
+        TRAIN_ARGS=("${FILTERED_ARGS[@]}")
+    fi
+    TRAIN_ARGS+=(--data-dir /content/data_real)
+    DATA_DIR=""
+elif [[ -z "$DATA_DIR" ]]; then
     if [[ -d data_real ]]; then
         DATA_DIR="data_real"
         TRAIN_ARGS+=(--data-dir data_real)
@@ -94,7 +130,7 @@ if [[ -z "$DATA_DIR" ]]; then
     fi
 fi
 
-if [[ ! -d "$DATA_DIR" ]]; then
+if [[ "$USE_DRIVE" -eq 0 && ! -d "$DATA_DIR" ]]; then
     echo "Missing dataset directory: $DATA_DIR" >&2
     exit 1
 fi
@@ -134,44 +170,58 @@ ensure_colab_cli
 BUNDLE="$ROOT/.colab_bundle.zip"
 RUN_FILE="$ROOT/.colab_run.py"
 EXTRACT_FILE="$ROOT/.colab_extract.py"
-rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE"
+PREPARE_FILE="$ROOT/.colab_prepare.py"
+rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE"
 
-DATA_SIZE="$(du -sh "$DATA_DIR" | cut -f1)"
-echo "Packing $DATA_DIR ($DATA_SIZE) plus train.py into a Colab zip. This can take a minute with no upload yet..."
+if [[ "$USE_DRIVE" -eq 1 ]]; then
+    echo "Packing training scripts only. Images will come from Google Drive ($DRIVE_DIR)."
+    PACK_DATA=""
+else
+    DATA_SIZE="$(du -sh "$DATA_DIR" | cut -f1)"
+    echo "Packing $DATA_DIR ($DATA_SIZE) plus train.py into a Colab zip. This can take a minute with no upload yet..."
+    PACK_DATA="$DATA_DIR"
+fi
 
-python3 - "$BUNDLE" "$DATA_DIR" "$RESUME" "$MODEL_PATH" <<'PY'
+python3 - "$BUNDLE" "$PACK_DATA" "$RESUME" "$MODEL_PATH" <<'PY'
 from pathlib import Path
 import sys
 import zipfile
 
 bundle, data_dir, resume, model_path = sys.argv[1:5]
-data_dir = Path(data_dir)
+data_dir = Path(data_dir) if data_dir else None
 model_path = Path(model_path)
 skip = {"__pycache__", ".DS_Store"}
+code_files = (
+    "train.py",
+    "trashnet.py",
+    "split_data.py",
+    "prepare_drive_data.py",
+)
 
 def log(message):
     print(message, flush=True)
 
-if not data_dir.is_dir():
-    raise SystemExit(f"Missing dataset directory: {data_dir}")
-
-files = [
-    path
-    for path in data_dir.rglob("*")
-    if path.is_file()
-    and path.name not in skip
-    and "__pycache__" not in path.parts
-]
-log(f"Zipping {len(files)} files from {data_dir}...")
-
 with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as archive:
-    for name in ("train.py", "trashnet.py"):
+    for name in code_files:
         archive.write(name)
 
-    for index, path in enumerate(files, start=1):
-        archive.write(path, path.as_posix())
-        if index == 1 or index == len(files) or index % 50 == 0:
-            log(f"  {index}/{len(files)} files")
+    if data_dir is not None:
+        if not data_dir.is_dir():
+            raise SystemExit(f"Missing dataset directory: {data_dir}")
+
+        files = [
+            path
+            for path in data_dir.rglob("*")
+            if path.is_file()
+            and path.name not in skip
+            and "__pycache__" not in path.parts
+        ]
+        log(f"Zipping {len(files)} files from {data_dir}...")
+
+        for index, path in enumerate(files, start=1):
+            archive.write(path, path.as_posix())
+            if index == 1 or index == len(files) or index % 50 == 0:
+                log(f"  {index}/{len(files)} files")
 
     if resume == "1":
         source = model_path
@@ -217,6 +267,31 @@ run_file.write_text(
 print(f"Wrote {run_file} with {train_args}")
 PY
 
+if [[ "$DRIVE_DIR" == /content/drive/* || "$DRIVE_DIR" == /* ]]; then
+    DRIVE_SOURCE="$DRIVE_DIR"
+else
+    DRIVE_SOURCE="/content/drive/MyDrive/$DRIVE_DIR"
+fi
+
+python3 - "$PREPARE_FILE" "$DRIVE_SOURCE" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+prepare_file = Path(sys.argv[1])
+source = sys.argv[2]
+prepare_file.write_text(
+    "import json\n"
+    "import runpy\n"
+    "import sys\n"
+    "sys.argv = ['prepare_drive_data.py', '--source', "
+    f"{json.dumps(source)}, '--dest', '/content/data_real']\n"
+    "runpy.run_path('prepare_drive_data.py', run_name='__main__')\n",
+    encoding="utf-8",
+)
+print(f"Wrote {prepare_file} for {source}")
+PY
+
 cat > "$EXTRACT_FILE" <<'PY'
 import zipfile
 from pathlib import Path
@@ -248,7 +323,7 @@ print("Extracted %s files into /content" % len(names), flush=True)
 PY
 
 cleanup() {
-    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE"
+    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE"
     if [[ "${KEEP:-0}" -eq 0 ]]; then
         if command -v colab >/dev/null 2>&1 && colab_session_is_up; then
             echo "Stopping session $SESSION"
@@ -292,11 +367,22 @@ else
     sleep 5
 fi
 
-echo "Uploading training bundle with progress (a single 2GB Colab PUT stays blank and often fails)"
+if [[ "$USE_DRIVE" -eq 1 ]]; then
+    echo "Uploading training scripts and checkpoint (photos stay on Drive)"
+else
+    echo "Uploading training bundle with progress (a single 2GB Colab PUT stays blank and often fails)"
+fi
 python3 colab_upload.py "$SESSION" "$BUNDLE" colab_bundle.part
 
 echo "Extracting training bundle on the VM"
 colab exec -s "$SESSION" --timeout 120 --env MPLBACKEND=Agg -f "$EXTRACT_FILE"
+
+if [[ "$USE_DRIVE" -eq 1 ]]; then
+    echo "Mounting Google Drive. Approve the prompt in this terminal if Colab asks."
+    colab drivemount -s "$SESSION"
+    echo "Linking Drive photos into train/validation/test (NonPlastic -> metal, Plastic -> plastic)"
+    colab exec -s "$SESSION" --timeout 600 --env MPLBACKEND=Agg -f "$PREPARE_FILE"
+fi
 
 echo "Installing Python packages (Colab already has CUDA PyTorch)"
 colab install -s "$SESSION" -r requirements-colab.txt
