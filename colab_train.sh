@@ -23,6 +23,8 @@ DATA_DIR=""
 USE_DRIVE=0
 DRIVE_DIR="${COLAB_DRIVE_DIR:-Subsystem_3/dataset/stage1_binary_v2}"
 TRAIN_ARGS=()
+PHASE=start
+ONE_SHOT_UPLOAD_MAX=$((100 * 1024 * 1024))
 
 usage() {
     cat <<'EOF'
@@ -324,13 +326,18 @@ PY
 
 cleanup() {
     rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE"
-    if [[ "${KEEP:-0}" -eq 0 ]]; then
-        if command -v colab >/dev/null 2>&1 && colab_session_is_up; then
-            echo "Stopping session $SESSION"
-            colab stop -s "$SESSION" || true
-        fi
-    else
+    if [[ "${KEEP:-0}" -eq 1 ]]; then
         echo "Leaving session $SESSION running (--keep)"
+        return
+    fi
+    if [[ "$PHASE" != "start" && "$PHASE" != "done" ]]; then
+        echo "Leaving session $SESSION running so a re-run can skip the upload."
+        echo "Re-run the same command. Pass --keep if you want to inspect the VM."
+        return
+    fi
+    if command -v colab >/dev/null 2>&1 && colab_session_is_up; then
+        echo "Stopping session $SESSION"
+        colab stop -s "$SESSION" || true
     fi
 }
 
@@ -354,6 +361,43 @@ colab_session_is_up() {
     printf '%s\n' "$output" | grep -Eq 'IDLE|BUSY|READY'
 }
 
+colab_exec() {
+    local timeout="$1"
+    local file="$2"
+    colab exec -s "$SESSION" --timeout "$timeout" -f "$file"
+}
+
+vm_ls() {
+    colab ls -s "$SESSION" 2>/dev/null || true
+}
+
+vm_has() {
+    vm_ls | grep -q "$1"
+}
+
+bundle_bytes() {
+    if stat -f%z "$BUNDLE" >/dev/null 2>&1; then
+        stat -f%z "$BUNDLE"
+    else
+        stat -c%s "$BUNDLE"
+    fi
+}
+
+upload_bundle() {
+    local size
+    size="$(bundle_bytes)"
+    if [[ "$size" -le "$ONE_SHOT_UPLOAD_MAX" ]]; then
+        echo "Uploading $(du -h "$BUNDLE" | cut -f1) in one request..."
+        if colab upload -s "$SESSION" "$BUNDLE" colab_bundle.zip; then
+            return
+        fi
+        echo "One-shot upload failed; falling back to 4MB chunks."
+    else
+        echo "Uploading $(du -h "$BUNDLE" | cut -f1) in 4MB chunks..."
+    fi
+    python3 colab_upload.py "$SESSION" "$BUNDLE" colab_bundle.part
+}
+
 trap cleanup EXIT
 
 echo "Checking Colab session '$SESSION' on $GPU..."
@@ -367,28 +411,41 @@ else
     sleep 5
 fi
 
-if [[ "$USE_DRIVE" -eq 1 ]]; then
-    echo "Uploading training scripts and checkpoint (photos stay on Drive)"
+if vm_has 'train.py'; then
+    echo "Training scripts already on the VM; skipping upload."
+    PHASE=uploaded
+elif vm_has 'colab_bundle'; then
+    echo "Found a previous bundle on the VM; extracting it instead of uploading again."
+    PHASE=uploaded
+    if ! colab_exec 120 "$EXTRACT_FILE"; then
+        echo "Extract failed; uploading a fresh bundle."
+        upload_bundle
+        colab_exec 120 "$EXTRACT_FILE"
+    fi
 else
-    echo "Uploading training bundle with progress (a single 2GB Colab PUT stays blank and often fails)"
+    if [[ "$USE_DRIVE" -eq 1 ]]; then
+        echo "Uploading training scripts and checkpoint (photos stay on Drive)"
+    else
+        echo "Uploading local dataset (this is the slow path; prefer --drive)"
+    fi
+    upload_bundle
+    PHASE=uploaded
+    echo "Extracting training bundle on the VM"
+    colab_exec 120 "$EXTRACT_FILE"
 fi
-python3 colab_upload.py "$SESSION" "$BUNDLE" colab_bundle.part
-
-echo "Extracting training bundle on the VM"
-colab exec -s "$SESSION" --timeout 120 --env MPLBACKEND=Agg -f "$EXTRACT_FILE"
 
 if [[ "$USE_DRIVE" -eq 1 ]]; then
     echo "Mounting Google Drive. Approve the prompt in this terminal if Colab asks."
     colab drivemount -s "$SESSION"
     echo "Linking Drive photos into train/validation/test (NonPlastic -> metal, Plastic -> plastic)"
-    colab exec -s "$SESSION" --timeout 600 --env MPLBACKEND=Agg -f "$PREPARE_FILE"
+    colab_exec 600 "$PREPARE_FILE"
 fi
 
 echo "Installing Python packages (Colab already has CUDA PyTorch)"
 colab install -s "$SESSION" -r requirements-colab.txt
 
 echo "Running train.py on $GPU"
-colab exec -s "$SESSION" --timeout "$TIMEOUT" --env MPLBACKEND=Agg -f "$RUN_FILE"
+colab_exec "$TIMEOUT" "$RUN_FILE"
 
 mkdir -p models
 
@@ -397,4 +454,5 @@ download_if_present confusion_matrix.png confusion_matrix.png
 download_if_present misclassified_validation.png misclassified_validation.png
 download_if_present misclassified_validation.txt misclassified_validation.txt
 
+PHASE=done
 echo "Training finished"
