@@ -133,7 +133,8 @@ ensure_colab_cli
 
 BUNDLE="$ROOT/.colab_bundle.zip"
 RUN_FILE="$ROOT/.colab_run.py"
-rm -f "$BUNDLE" "$RUN_FILE"
+EXTRACT_FILE="$ROOT/.colab_extract.py"
+rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE"
 
 DATA_SIZE="$(du -sh "$DATA_DIR" | cut -f1)"
 echo "Packing $DATA_DIR ($DATA_SIZE) plus train.py into a Colab zip. This can take a minute with no upload yet..."
@@ -216,8 +217,23 @@ run_file.write_text(
 print(f"Wrote {run_file} with {train_args}")
 PY
 
+cat > "$EXTRACT_FILE" <<'PY'
+import zipfile
+from pathlib import Path
+
+bundle = Path("/content/colab_bundle.zip")
+if not bundle.exists():
+    bundle = Path("colab_bundle.zip")
+
+with zipfile.ZipFile(bundle) as archive:
+    names = archive.namelist()
+    archive.extractall("/content")
+
+print("Extracted %s files into /content" % len(names))
+PY
+
 cleanup() {
-    rm -f "$BUNDLE" "$RUN_FILE"
+    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE"
     if [[ "${KEEP:-0}" -eq 0 ]]; then
         if command -v colab >/dev/null 2>&1 && colab status -s "$SESSION" >/dev/null 2>&1; then
             echo "Stopping session $SESSION"
@@ -225,6 +241,16 @@ cleanup() {
         fi
     else
         echo "Leaving session $SESSION running (--keep)"
+    fi
+}
+
+download_if_present() {
+    local remote="$1"
+    local local_path="$2"
+    if colab download -s "$SESSION" "$remote" "$local_path"; then
+        echo "Downloaded $remote -> $local_path"
+    else
+        echo "Skip download (missing on VM): $remote"
     fi
 }
 
@@ -242,20 +268,8 @@ fi
 echo "Uploading training bundle"
 colab upload -s "$SESSION" "$BUNDLE" colab_bundle.zip
 
-colab exec -s "$SESSION" --timeout 120 --env MPLBACKEND=Agg <<'PY'
-import zipfile
-from pathlib import Path
-
-bundle = Path("/content/colab_bundle.zip")
-if not bundle.exists():
-    bundle = Path("colab_bundle.zip")
-
-with zipfile.ZipFile(bundle) as archive:
-    names = archive.namelist()
-    archive.extractall("/content")
-
-print(f"Extracted {len(names)} files into /content")
-PY
+echo "Extracting training bundle on the VM"
+colab exec -s "$SESSION" --timeout 120 --env MPLBACKEND=Agg -f "$EXTRACT_FILE"
 
 echo "Installing Python packages (Colab already has CUDA PyTorch)"
 colab install -s "$SESSION" -r requirements-colab.txt
@@ -264,16 +278,6 @@ echo "Running train.py on $GPU"
 colab exec -s "$SESSION" --timeout "$TIMEOUT" --env MPLBACKEND=Agg -f "$RUN_FILE"
 
 mkdir -p models
-
-download_if_present() {
-    local remote="$1"
-    local local_path="$2"
-    if colab download -s "$SESSION" "$remote" "$local_path"; then
-        echo "Downloaded $remote -> $local_path"
-    else
-        echo "Skip download (missing on VM): $remote"
-    fi
-}
 
 download_if_present "$MODEL_PATH" "$MODEL_PATH"
 download_if_present confusion_matrix.png confusion_matrix.png
