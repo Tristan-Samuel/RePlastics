@@ -221,15 +221,30 @@ cat > "$EXTRACT_FILE" <<'PY'
 import zipfile
 from pathlib import Path
 
-bundle = Path("/content/colab_bundle.zip")
-if not bundle.exists():
-    bundle = Path("colab_bundle.zip")
+content = Path("/content")
+parts = sorted(content.glob("colab_bundle.part.*"))
+bundle = content / "colab_bundle.zip"
 
+if parts:
+    print("Joining %s upload parts..." % len(parts), flush=True)
+    with bundle.open("wb") as out:
+        for index, part in enumerate(parts, start=1):
+            out.write(part.read_bytes())
+            part.unlink()
+            if index == 1 or index == len(parts) or index % 25 == 0:
+                print("  joined %s/%s" % (index, len(parts)), flush=True)
+
+if not bundle.exists():
+    fallback = Path("colab_bundle.zip")
+    if fallback.exists():
+        bundle = fallback
+
+print("Extracting %s..." % bundle, flush=True)
 with zipfile.ZipFile(bundle) as archive:
     names = archive.namelist()
     archive.extractall("/content")
 
-print("Extracted %s files into /content" % len(names))
+print("Extracted %s files into /content" % len(names), flush=True)
 PY
 
 cleanup() {
@@ -273,10 +288,12 @@ if colab_session_is_up print; then
 else
     echo "Starting Colab session $SESSION on $GPU"
     colab new -s "$SESSION" --gpu "$GPU"
+    echo "Waiting a few seconds for the T4 proxy to come up..."
+    sleep 5
 fi
 
-echo "Uploading training bundle"
-colab upload -s "$SESSION" "$BUNDLE" colab_bundle.zip
+echo "Uploading training bundle with progress (a single 2GB Colab PUT stays blank and often fails)"
+python3 colab_upload.py "$SESSION" "$BUNDLE" colab_bundle.part
 
 echo "Extracting training bundle on the VM"
 colab exec -s "$SESSION" --timeout 120 --env MPLBACKEND=Agg -f "$EXTRACT_FILE"
