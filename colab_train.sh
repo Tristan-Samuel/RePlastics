@@ -183,7 +183,8 @@ RUN_FILE="$ROOT/.colab_run.py"
 EXTRACT_FILE="$ROOT/.colab_extract.py"
 PREPARE_FILE="$ROOT/.colab_prepare.py"
 CHECKPOINT_FILE="$ROOT/.colab_checkpoint.py"
-rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE"
+CHECK_DRIVE_FILE="$ROOT/.colab_check_drive.py"
+rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE" "$CHECK_DRIVE_FILE"
 
 if [[ "$USE_DRIVE" -eq 1 ]]; then
     echo "Packing training scripts only. Images will come from Google Drive ($DRIVE_DIR)."
@@ -342,11 +343,34 @@ import zipfile
 from pathlib import Path
 
 content = Path("/content")
-parts = sorted(content.glob("colab_bundle.part.*"))
-bundle = content / "colab_bundle.zip"
+search_roots = [content, Path("/"), Path.cwd()]
+seen = set()
+parts = []
+for root in search_roots:
+    if not root.exists():
+        continue
+    for part in sorted(root.glob("colab_bundle.part.*")):
+        key = str(part.resolve()) if part.exists() else str(part)
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(part)
 
-if bundle.exists() and parts:
-    print("Ignoring leftover upload parts; using colab_bundle.zip", flush=True)
+candidates = [
+    content / "colab_bundle.zip",
+    Path("colab_bundle.zip"),
+    Path("/colab_bundle.zip"),
+]
+for root in search_roots:
+    if not root.exists():
+        continue
+    for found in root.glob("colab_bundle.zip"):
+        candidates.append(found)
+
+bundle = next((path for path in candidates if path.is_file()), content / "colab_bundle.zip")
+
+if bundle.is_file() and parts:
+    print("Ignoring leftover upload parts; using", bundle, flush=True)
     for part in parts:
         part.unlink()
     parts = []
@@ -360,10 +384,10 @@ if parts:
             if index == 1 or index == len(parts) or index % 25 == 0:
                 print("  joined %s/%s" % (index, len(parts)), flush=True)
 
-if not bundle.exists():
-    fallback = Path("colab_bundle.zip")
-    if fallback.exists():
-        bundle = fallback
+if not bundle.is_file():
+    listing = sorted(p.name for p in content.iterdir()) if content.is_dir() else []
+    print("Zip not found. /content has:", listing, flush=True)
+    raise SystemExit("Missing colab_bundle.zip after upload")
 
 print("Extracting %s..." % bundle, flush=True)
 with zipfile.ZipFile(bundle) as archive:
@@ -371,10 +395,30 @@ with zipfile.ZipFile(bundle) as archive:
     archive.extractall("/content")
 
 print("Extracted %s files into /content" % len(names), flush=True)
+if not Path("/content/train.py").is_file():
+    raise SystemExit("Extract finished but /content/train.py is missing")
+PY
+
+python3 - "$CHECK_DRIVE_FILE" <<'PY'
+from pathlib import Path
+import sys
+
+Path(sys.argv[1]).write_text(
+    "from pathlib import Path\n"
+    "root = Path('/content/drive/MyDrive')\n"
+    "if root.is_dir():\n"
+    "    print('DRIVE_MOUNTED', flush=True)\n"
+    "    for child in sorted(root.iterdir())[:20]:\n"
+    "        print(' ', child.name, flush=True)\n"
+    "else:\n"
+    "    print('DRIVE_NOT_MOUNTED', flush=True)\n",
+    encoding="utf-8",
+)
+print("Wrote", sys.argv[1])
 PY
 
 cleanup() {
-    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE"
+    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE" "$CHECK_DRIVE_FILE"
     if [[ "${KEEP:-0}" -eq 1 ]]; then
         echo "Leaving session $SESSION running (--keep)"
         return
@@ -437,14 +481,70 @@ upload_bundle() {
     size="$(bundle_bytes)"
     if [[ "$size" -le "$ONE_SHOT_UPLOAD_MAX" ]]; then
         echo "Uploading $(du -h "$BUNDLE" | cut -f1) in one request..."
-        if colab upload -s "$SESSION" "$BUNDLE" colab_bundle.zip; then
+        if colab upload -s "$SESSION" "$BUNDLE" /content/colab_bundle.zip; then
             return
         fi
         echo "One-shot upload failed; falling back to 4MB chunks."
     else
         echo "Uploading $(du -h "$BUNDLE" | cut -f1) in 4MB chunks..."
     fi
-    python3 colab_upload.py "$SESSION" "$BUNDLE" colab_bundle.part
+    python3 colab_upload.py "$SESSION" "$BUNDLE" content/colab_bundle.part
+}
+
+drive_is_mounted() {
+    local output
+    output="$(colab_exec 60 "$CHECK_DRIVE_FILE" 2>&1)" || true
+    printf '%s\n' "$output"
+    printf '%s\n' "$output" | grep -q DRIVE_MOUNTED
+}
+
+ensure_scripts_on_vm() {
+    if vm_has 'train.py'; then
+        echo "Training scripts already on the VM; skipping upload."
+        return
+    fi
+    echo "Uploading training scripts (photos and checkpoint stay on Drive)"
+    upload_bundle
+    PHASE=uploaded
+    echo "Extracting training scripts on the VM"
+    colab_exec 120 "$EXTRACT_FILE" || true
+    if ! vm_has 'train.py'; then
+        echo "Extract failed. Files currently on the VM:" >&2
+        vm_ls >&2
+        exit 1
+    fi
+}
+
+mount_google_drive() {
+    if drive_is_mounted; then
+        echo "Google Drive is already mounted"
+        return
+    fi
+
+    echo "Mounting Google Drive."
+    echo "Colab will print a URL. Open it, finish the Google consent page,"
+    echo "and wait until that page says you can close it. Then press Enter."
+    echo "Pressing Enter too early causes a 400 and the mount fails."
+    colab drivemount -s "$SESSION" || true
+    if drive_is_mounted; then
+        return
+    fi
+
+    echo "CLI Drive mount did not finish. Open the Colab session in a browser:"
+    colab url -s "$SESSION" || true
+    echo "In a notebook cell run:"
+    echo "  from google.colab import drive"
+    echo "  drive.mount('/content/drive')"
+    echo "Press Enter here after My Drive is visible on the VM."
+    if [[ -r /dev/tty ]]; then
+        IFS= read -r _ </dev/tty || true
+    else
+        IFS= read -r _ || true
+    fi
+    if ! drive_is_mounted; then
+        echo "Google Drive is still not mounted at /content/drive/MyDrive." >&2
+        exit 1
+    fi
 }
 
 stage_checkpoint_on_drive() {
@@ -485,38 +585,42 @@ else
 fi
 
 if [[ "$USE_DRIVE" -eq 1 ]]; then
-    echo "Uploading training scripts (photos and checkpoint stay on Drive)"
-    upload_bundle
+    ensure_scripts_on_vm
     PHASE=uploaded
-    echo "Extracting training scripts on the VM"
-    colab_exec 120 "$EXTRACT_FILE"
+    mount_google_drive
+    echo "Linking Drive photos into train/validation/test (NonPlastic -> metal, Plastic -> plastic)"
+    colab_exec 600 "$PREPARE_FILE"
+    if [[ "$RESUME" -eq 1 ]]; then
+        echo "Copying checkpoint from Drive onto the VM"
+        colab_exec 120 "$CHECKPOINT_FILE"
+    fi
 elif vm_has 'train.py'; then
     echo "Training scripts already on the VM; skipping upload."
     PHASE=uploaded
 elif vm_has 'colab_bundle'; then
     echo "Found a previous bundle on the VM; extracting it instead of uploading again."
     PHASE=uploaded
-    if ! colab_exec 120 "$EXTRACT_FILE"; then
+    colab_exec 120 "$EXTRACT_FILE" || true
+    if ! vm_has 'train.py'; then
         echo "Extract failed; uploading a fresh bundle."
         upload_bundle
-        colab_exec 120 "$EXTRACT_FILE"
+        colab_exec 120 "$EXTRACT_FILE" || true
+        if ! vm_has 'train.py'; then
+            echo "Extract failed. Files currently on the VM:" >&2
+            vm_ls >&2
+            exit 1
+        fi
     fi
 else
     echo "Uploading local dataset (this is the slow path; prefer --drive)"
     upload_bundle
     PHASE=uploaded
     echo "Extracting training bundle on the VM"
-    colab_exec 120 "$EXTRACT_FILE"
-fi
-
-if [[ "$USE_DRIVE" -eq 1 ]]; then
-    echo "Mounting Google Drive. Approve the prompt in this terminal if Colab asks."
-    colab drivemount -s "$SESSION"
-    echo "Linking Drive photos into train/validation/test (NonPlastic -> metal, Plastic -> plastic)"
-    colab_exec 600 "$PREPARE_FILE"
-    if [[ "$RESUME" -eq 1 ]]; then
-        echo "Copying checkpoint from Drive onto the VM"
-        colab_exec 120 "$CHECKPOINT_FILE"
+    colab_exec 120 "$EXTRACT_FILE" || true
+    if ! vm_has 'train.py'; then
+        echo "Extract failed. Files currently on the VM:" >&2
+        vm_ls >&2
+        exit 1
     fi
 fi
 
