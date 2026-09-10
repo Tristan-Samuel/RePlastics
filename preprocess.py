@@ -58,10 +58,13 @@ def inference_transform():
 
 
 def train_transform():
-    """ImageNet-style 224×224 crop plus light aug. Output tensors are always 224×224."""
+    """Same 224×224 bilinear scale as production, plus light aug."""
     return transforms.Compose(
         [
-            transforms.RandomResizedCrop(INPUT_SIZE),
+            transforms.Resize(
+                (INPUT_SIZE, INPUT_SIZE),
+                interpolation=transforms.InterpolationMode.BILINEAR,
+            ),
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(15),
             transforms.ToTensor(),

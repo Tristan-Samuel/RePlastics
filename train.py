@@ -165,8 +165,7 @@ if loader_options["num_workers"] > 0:
 
 weights = ResNeXt50_32X4D_Weights.DEFAULT
 
-# Files on disk can be any size. The tensor the network sees is always 224×224,
-# same as ImageNet pretraining and the production camera path.
+# Train, val, test, and production all scale to 224×224 before the network.
 train_transform = build_train_transform()
 eval_transform = inference_transform()
 
