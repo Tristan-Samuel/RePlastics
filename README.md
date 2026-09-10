@@ -132,7 +132,16 @@ chmod +x colab_train.sh
 ./colab_train.sh --drive --resume --unfreeze fc --epochs 8
 ```
 
-That mounts Google Drive instead of uploading photos. Default folder is `MyDrive/stage1_binary_v2`, which should contain `train/NonPlastic` and `train/Plastic`. Those names are mapped to **metal** and **plastic**. If Drive already has `val/`, that split is kept and 15% of train is held out as test. Originals are not moved. Override the folder with `--drive-dir`.
+That mounts Google Drive, copies `train/NonPlastic` and `train/Plastic` onto the VM disk as **metal** / **plastic**, and keeps Drive `val/` as validation while holding out 15% of train as test. Drive originals are not moved. The copy is the slow step; after that the T4 reads local files. Override the folder with `--drive-dir`.
+
+Fine-tune on the **same VM** without copying again:
+
+```bash
+./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 8
+./colab_train.sh --keep --drive --resume --unfreeze layer4 --lr 0.001 --lr-backbone 0.0001 --epochs 8
+```
+
+`--keep` leaves the T4 up so `/content/data_real` survives. Changing `--unfreeze` or the learning rate still runs a short validation pass first (now with batch logs). That pass is seconds on local disk, not minutes on Drive. If you stop the session, the VM disk is wiped and the next `--drive` run copies photos once more.
 
 To upload a local `data_real` tree instead:
 
@@ -144,7 +153,7 @@ The first run prints a Google sign-in URL. Open it, approve access, then paste t
 
 If login fails with `Scope has changed`, re-run the command. The helper treats a reduced Google grant as a warning instead of crashing. You should not need to paste a code again once `~/.config/colab-cli/token.json` exists.
 
-With `--drive`, the helper zips only the training scripts and (if `--resume`) the checkpoint, mounts Drive, and reads photos from there. Otherwise it also zips the local dataset directory. It installs `requirements-colab.txt` on the VM (PyTorch is already on Colab), then pulls back `models/resnext50_metal_plastic.pt` and the confusion-matrix artifacts. The VM is stopped when the script exits unless you pass `--keep`.
+With `--drive`, the helper zips only the training scripts, mounts Drive, copies photos onto the VM disk, and (if `--resume`) copies the checkpoint from Drive. Otherwise it also zips the local dataset directory. It installs `requirements-colab.txt` on the VM (PyTorch is already on Colab), then pulls back `models/resnext50_metal_plastic.pt` and the confusion-matrix artifacts. The VM is stopped when the script exits unless you pass `--keep`.
 
 ## Predict
 

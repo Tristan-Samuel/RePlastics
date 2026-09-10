@@ -132,6 +132,14 @@ print(f"Using device: {device}", flush=True)
 print(f"Data dir: {args.data_dir}", flush=True)
 print(f"Unfreeze: {args.unfreeze}", flush=True)
 
+loader_options = {
+    "batch_size": BATCH_SIZE,
+    "num_workers": 2 if device.type == "cuda" else 0,
+    "pin_memory": device.type == "cuda",
+}
+if loader_options["num_workers"] > 0:
+    loader_options["persistent_workers"] = True
+
 
 # ---------------------------------------------------------
 # Image preprocessing
@@ -196,20 +204,20 @@ assert (
 
 train_loader = DataLoader(
     training_images,
-    batch_size=BATCH_SIZE,
     shuffle=True,
+    **loader_options,
 )
 
 validation_loader = DataLoader(
     validation_images,
-    batch_size=BATCH_SIZE,
     shuffle=False,
+    **loader_options,
 )
 
 test_loader = DataLoader(
     test_images,
-    batch_size=BATCH_SIZE,
     shuffle=False,
+    **loader_options,
 )
 
 print(f"Training images:   {len(training_images)}", flush=True)
@@ -543,6 +551,10 @@ best_model_weights = copy.deepcopy(
 )
 
 if args.resume:
+    print(
+        "Scoring the current checkpoint on validation before training...",
+        flush=True,
+    )
     model.eval()
 
     running_loss = 0.0
@@ -551,7 +563,10 @@ if args.resume:
 
     with torch.no_grad():
 
-        for images, labels in validation_loader:
+        for batch_index, (images, labels) in enumerate(
+            validation_loader,
+            start=1,
+        ):
 
             images = images.to(device)
             labels = labels.to(device)
@@ -570,6 +585,15 @@ if args.resume:
             ).sum().item()
 
             total_predictions += labels.size(0)
+
+            if batch_index % 20 == 0 or batch_index == len(
+                validation_loader
+            ):
+                print(
+                    f"  Starting val batch "
+                    f"{batch_index}/{len(validation_loader)}",
+                    flush=True,
+                )
 
     best_validation_accuracy = (
         correct_predictions

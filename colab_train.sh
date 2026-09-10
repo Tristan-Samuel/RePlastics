@@ -485,11 +485,7 @@ upload_bundle() {
 }
 
 ensure_scripts_on_vm() {
-    if vm_has 'train.py'; then
-        echo "Training scripts already on the VM; skipping upload."
-        return
-    fi
-    echo "Uploading training scripts (photos and checkpoint stay on Drive)"
+    echo "Uploading training scripts (photos stay on Drive until copied onto the VM disk)"
     upload_bundle
     PHASE=uploaded
     echo "Extracting training scripts on the VM"
@@ -542,8 +538,8 @@ if [[ "$USE_DRIVE" -eq 1 ]]; then
     ensure_scripts_on_vm
     PHASE=uploaded
     mount_google_drive
-    echo "Linking Drive photos into train/validation/test (NonPlastic -> metal, Plastic -> plastic)"
-    colab_exec 600 "$PREPARE_FILE"
+    echo "Copying Drive photos onto the VM disk (skipped if a local copy already exists)"
+    colab_exec 3600 "$PREPARE_FILE"
     if [[ "$RESUME" -eq 1 ]]; then
         echo "Copying checkpoint from Drive onto the VM"
         colab_exec 120 "$CHECKPOINT_FILE"

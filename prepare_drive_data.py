@@ -8,13 +8,15 @@ Expected source:
     <source>/val/NonPlastic   (optional)
     <source>/val/Plastic      (optional)
 
-NonPlastic is treated as metal. Files are not copied; dest uses symlinks.
+NonPlastic is treated as metal. Files are copied onto dest (VM disk) so
+training does not read Drive FUSE on every batch. Drive originals stay put.
 
 If Drive already has train/ and val/, val is kept as validation and 15% of
 train is held out as test. If only train/ exists, split 70/15/15.
 """
 
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 import shutil
 
@@ -66,6 +68,11 @@ def parse_args():
         type=Path,
         default=Path("/content/data_real"),
         help="Where to write the metal/plastic split tree.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild dest even if a local copy already exists.",
     )
     return parser.parse_args()
 
@@ -139,20 +146,70 @@ def unique_destination(destination_dir, source_path):
     return destination_dir / f"{source_path.parent.name}_{source_path.name}"
 
 
-def link_file(source_path, destination):
-    destination.symlink_to(source_path.resolve())
+def tree_uses_symlinks(root):
+    return any(path.is_symlink() for path in root.rglob("*"))
 
 
-def link_paths(paths, split_dir, class_name, copied, split_name):
+def local_copy_ready(dest):
+    if not dest.is_dir() or tree_uses_symlinks(dest):
+        return False
+
+    for split_name in ("train", "validation", "test"):
+        for class_name in EXPECTED_CLASSES:
+            folder = dest / split_name / class_name
+            if not folder.is_dir():
+                return False
+            if not any(
+                path.is_file() and not path.is_symlink()
+                for path in folder.iterdir()
+            ):
+                return False
+    return True
+
+
+def count_split_files(dest):
+    counts = {"train": 0, "validation": 0, "test": 0}
+    for split_name in counts:
+        for class_name in EXPECTED_CLASSES:
+            folder = dest / split_name / class_name
+            if not folder.is_dir():
+                continue
+            counts[split_name] += sum(
+                1
+                for path in folder.iterdir()
+                if path.is_file() and not path.is_symlink()
+            )
+    return counts
+
+
+def copy_paths(paths, split_dir, class_name, copied, split_name):
     destination_dir = split_dir / class_name
     destination_dir.mkdir(parents=True, exist_ok=True)
 
+    jobs = []
     for source_path in paths:
         destination = unique_destination(destination_dir, source_path)
         if destination.exists():
             raise FileExistsError(f"{destination} already exists")
-        link_file(source_path, destination)
-        copied[split_name] += 1
+        jobs.append((source_path.resolve(), destination))
+
+    done = 0
+    workers = min(8, len(jobs)) or 1
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(shutil.copy2, source, destination)
+            for source, destination in jobs
+        ]
+        for future in as_completed(futures):
+            future.result()
+            done += 1
+            copied[split_name] += 1
+            if done == 1 or done == len(jobs) or done % 50 == 0:
+                print(
+                    f"  copied {done}/{len(jobs)} "
+                    f"{split_name}/{class_name}",
+                    flush=True,
+                )
 
 
 def holdout_test(paths, generator):
@@ -207,11 +264,23 @@ def resolve_source(source):
 
 def main():
     args = parse_args()
-    source = resolve_source(args.source)
     dest = args.dest
 
-    print(f"Drive source: {source}", flush=True)
     print(f"Split dest: {dest}", flush=True)
+
+    if not args.force and local_copy_ready(dest):
+        copied = count_split_files(dest)
+        print(
+            f"{dest} already has a local copy. Skipping Drive copy.",
+            flush=True,
+        )
+        print(f"  train: {copied['train']}", flush=True)
+        print(f"  validation: {copied['validation']}", flush=True)
+        print(f"  test: {copied['test']}", flush=True)
+        return
+
+    source = resolve_source(args.source)
+    print(f"Drive source: {source}", flush=True)
 
     source_splits = discover_source_splits(source)
     if "train" not in source_splits:
@@ -229,6 +298,12 @@ def main():
         print(f"Replacing existing {dest}", flush=True)
         shutil.rmtree(dest)
 
+    print(
+        "Copying photos from Drive onto the VM disk. "
+        "This is a one-time wait for this session.",
+        flush=True,
+    )
+
     ensure_split_layout(dest)
     dest_splits = split_dirs_for(dest)
     generator = torch.Generator().manual_seed(RANDOM_SEED)
@@ -244,7 +319,7 @@ def main():
                     f"  {folder} ({len(paths)}) -> {split_name}/{class_name}",
                     flush=True,
                 )
-                link_paths(
+                copy_paths(
                     paths,
                     dest_splits[split_name],
                     class_name,
@@ -273,21 +348,21 @@ def main():
                 f"{len(val_paths)} val, {len(test_paths)} test",
                 flush=True,
             )
-            link_paths(
+            copy_paths(
                 training_paths,
                 dest_splits["train"],
                 class_name,
                 copied,
                 "train",
             )
-            link_paths(
+            copy_paths(
                 val_paths,
                 dest_splits["validation"],
                 class_name,
                 copied,
                 "validation",
             )
-            link_paths(
+            copy_paths(
                 test_paths,
                 dest_splits["test"],
                 class_name,
@@ -309,21 +384,21 @@ def main():
                 paths,
                 generator,
             )
-            link_paths(
+            copy_paths(
                 training_paths,
                 dest_splits["train"],
                 class_name,
                 copied,
                 "train",
             )
-            link_paths(
+            copy_paths(
                 validation_paths,
                 dest_splits["validation"],
                 class_name,
                 copied,
                 "validation",
             )
-            link_paths(
+            copy_paths(
                 test_paths,
                 dest_splits["test"],
                 class_name,
@@ -332,13 +407,14 @@ def main():
             )
 
     print(flush=True)
-    print("Linked images into:", flush=True)
+    print("Copied images onto the VM disk:", flush=True)
     print(f"  train: {copied['train']}", flush=True)
     print(f"  validation: {copied['validation']}", flush=True)
     print(f"  test: {copied['test']}", flush=True)
     print(
         "Original Drive files are unchanged. "
-        "NonPlastic is mapped to metal.",
+        "NonPlastic is mapped to metal. "
+        "Later runs on this VM reuse these local files.",
         flush=True,
     )
 
