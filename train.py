@@ -134,7 +134,7 @@ print(f"Unfreeze: {args.unfreeze}", flush=True)
 
 loader_options = {
     "batch_size": BATCH_SIZE,
-    "num_workers": 2 if device.type == "cuda" else 0,
+    "num_workers": 4 if device.type == "cuda" else 0,
     "pin_memory": device.type == "cuda",
 }
 if loader_options["num_workers"] > 0:

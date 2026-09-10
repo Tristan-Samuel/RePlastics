@@ -425,9 +425,16 @@ download_if_present() {
     local local_path="$2"
     if colab download -s "$SESSION" "$remote" "$local_path"; then
         echo "Downloaded $remote -> $local_path"
-    else
-        echo "Skip download (missing on VM): $remote"
+        return 0
     fi
+    if [[ "$remote" != content/* && "$remote" != /* ]]; then
+        if colab download -s "$SESSION" "content/$remote" "$local_path"; then
+            echo "Downloaded content/$remote -> $local_path"
+            return 0
+        fi
+    fi
+    echo "Skip download (missing on VM): $remote"
+    return 0
 }
 
 # colab status prints "not found" but still exits 0.
