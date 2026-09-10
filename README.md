@@ -132,7 +132,7 @@ chmod +x colab_train.sh
 ./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 6
 ```
 
-If `MyDrive/stage1_binary_v2_256.zip` exists, that 256px zip is copied onto the VM and unzipped. Otherwise the helper copies full-size Drive photos file by file. Drive originals are not moved. After ingest, `--keep` leaves `/content/data_real` so later `--unfreeze` / `--lr` runs skip ingest.
+If `MyDrive/stage1_binary_v2_256.zip` exists, that 256px zip is copied onto the VM and unzipped. Rebuild it from the live Drive folder (not the incomplete Chrome copies) with `python resize_stage1.py`. That script reads `My Drive/stage1_binary_v2`, drops exact train copies of val files, and replaces the zip. The next Colab ingest keeps the previous 265 test photos (`stage1_locked_test_stems.txt`) and puts newly added train photos in train only. Otherwise the helper copies full-size Drive photos file by file. Drive originals are not moved. After ingest, `--keep` leaves `/content/data_real` so later `--unfreeze` / `--lr` runs skip ingest.
 
 Fine-tune on the **same VM** without copying again:
 

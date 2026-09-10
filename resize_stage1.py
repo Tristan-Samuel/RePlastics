@@ -1,42 +1,91 @@
 #!/usr/bin/env python3
-"""Resize the local Drive export to 256px on the long side and zip it.
+"""Resize stage1_binary_v2 to 256px on the long side and zip it.
 
-Reads the five downloaded folders under ~/Downloads/stage1_binary_v2,
-merges unique train/val paths, writes JPEGs to ~/Downloads/stage1_binary_v2_256,
-and creates a store-only zip next to that folder.
+Reads the live Drive folder (train/val, NonPlastic/Plastic), drops exact
+train copies of files that already sit in val, writes JPEGs to
+~/Downloads/stage1_binary_v2_256, and creates a store-only zip.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 import os
+import shutil
 import zipfile
 
 from PIL import Image, ImageOps
 
 
-SOURCE_ROOT = Path.home() / "Downloads" / "stage1_binary_v2"
+SOURCE_ROOT = Path(
+    "/Users/tristan/Library/CloudStorage/GoogleDrive-intern"
+    "@replasticrecycle.com/My Drive/stage1_binary_v2"
+)
 DEST_ROOT = Path.home() / "Downloads" / "stage1_binary_v2_256"
 ZIP_PATH = Path.home() / "Downloads" / "stage1_binary_v2_256.zip"
+DRIVE_ZIP = Path(
+    "/Users/tristan/Library/CloudStorage/GoogleDrive-intern"
+    "@replasticrecycle.com/My Drive/stage1_binary_v2_256.zip"
+)
 LONG_SIDE = 256
 JPEG_QUALITY = 90
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+CLASS_FOLDERS = (
+    ("train", "NonPlastic"),
+    ("train", "Plastic"),
+    ("val", "NonPlastic"),
+    ("val", "Plastic"),
+)
+
+
+def image_files(folder: Path):
+    if not folder.is_dir():
+        return []
+    return sorted(
+        path
+        for path in folder.iterdir()
+        if path.is_file()
+        and path.suffix.lower() in IMAGE_SUFFIXES
+        and path.name != ".DS_Store"
+    )
 
 
 def collect_unique_sources():
+    if not SOURCE_ROOT.is_dir():
+        raise SystemExit(f"Missing Drive dataset: {SOURCE_ROOT}")
+
+    extra = [
+        path.name
+        for path in SOURCE_ROOT.iterdir()
+        if path.name not in {"train", "val"}
+    ]
+    if extra:
+        print(f"Ignoring extra top-level names: {extra}", flush=True)
+
+    grouped = defaultdict(list)
+    for split, class_name in CLASS_FOLDERS:
+        folder = SOURCE_ROOT / split / class_name
+        for path in image_files(folder):
+            grouped[path.name].append((split, class_name, path))
+
     files = {}
-    for child in sorted(SOURCE_ROOT.iterdir()):
-        if not child.is_dir():
-            continue
-        for path in child.rglob("*"):
-            if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES:
-                continue
-            if path.name == ".DS_Store":
-                continue
-            relative = path.relative_to(child)
-            files.setdefault(relative.as_posix(), path)
-    return files
+    dropped = []
+    for name, locations in grouped.items():
+        splits = {split for split, _, _ in locations}
+        if "train" in splits and "val" in splits:
+            keep = [item for item in locations if item[0] == "val"]
+            dropped.extend(
+                f"{split}/{class_name}/{name}"
+                for split, class_name, _ in locations
+                if split == "train"
+            )
+            locations = keep
+        for split, class_name, path in locations:
+            relative = f"{split}/{class_name}/{name}"
+            files[relative] = path
+
+    return files, dropped
 
 
 def resize_one(job):
@@ -74,13 +123,21 @@ def resize_one(job):
 
 
 def main():
-    files = collect_unique_sources()
+    files, dropped = collect_unique_sources()
     if not files:
         raise SystemExit(f"No images under {SOURCE_ROOT}")
 
-    if DEST_ROOT.exists():
-        import shutil
+    print(f"Drive source: {SOURCE_ROOT}", flush=True)
+    print(f"Unique photos: {len(files)}", flush=True)
+    if dropped:
+        print(
+            f"Dropped {len(dropped)} train copies that are identical in val:",
+            flush=True,
+        )
+        for item in dropped:
+            print(f"  {item}", flush=True)
 
+    if DEST_ROOT.exists():
         shutil.rmtree(DEST_ROOT)
     DEST_ROOT.mkdir(parents=True)
 
@@ -88,9 +145,9 @@ def main():
         (relative, source, DEST_ROOT, LONG_SIDE, JPEG_QUALITY)
         for relative, source in files.items()
     ]
-    workers = os.cpu_count() or 4
+    workers = min(4, os.cpu_count() or 4)
     print(
-        f"Resizing {len(jobs)} unique images -> {DEST_ROOT} "
+        f"Resizing {len(jobs)} images -> {DEST_ROOT} "
         f"({workers} workers, long side {LONG_SIDE})",
         flush=True,
     )
@@ -120,9 +177,16 @@ def main():
     ) as archive:
         for path in DEST_ROOT.rglob("*"):
             if path.is_file():
-                archive.write(path, f"stage1_binary_v2_256/{path.relative_to(DEST_ROOT)}")
+                archive.write(
+                    path,
+                    f"stage1_binary_v2_256/{path.relative_to(DEST_ROOT)}",
+                )
     zip_mb = ZIP_PATH.stat().st_size / (1024 * 1024)
     print(f"Zip {zip_mb:.1f} MB at {ZIP_PATH}", flush=True)
+
+    DRIVE_ZIP.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ZIP_PATH, DRIVE_ZIP)
+    print(f"Copied zip to {DRIVE_ZIP}", flush=True)
 
 
 if __name__ == "__main__":

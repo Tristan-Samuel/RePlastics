@@ -11,8 +11,10 @@ Expected source:
 NonPlastic is treated as metal. Files are copied onto dest (VM disk) so
 training does not read Drive FUSE on every batch. Drive originals stay put.
 
-If Drive already has train/ and val/, val is kept as validation and 15% of
-train is held out as test. If only train/ exists, split 70/15/15.
+If Drive already has train/ and val/, val is kept as validation. Test is the
+locked filename list when stage1_locked_test_stems.txt is present, otherwise
+15% of train. New train photos stay in train so the old test set cannot leak.
+If only train/ exists, split 70/15/15.
 """
 
 from pathlib import Path
@@ -30,6 +32,8 @@ from split_data import (
     split_paths,
 )
 from trashnet import EXPECTED_CLASSES, ensure_split_layout, split_dirs_for
+
+LOCKED_TEST_FILE = Path("stage1_locked_test_stems.txt")
 
 
 CLASS_ALIASES = {
@@ -227,7 +231,31 @@ def copy_paths(paths, split_dir, class_name, copied, split_name):
                 )
 
 
-def holdout_test(paths, generator):
+def load_locked_test_stems():
+    for candidate in (
+        LOCKED_TEST_FILE,
+        Path("/content") / LOCKED_TEST_FILE.name,
+        Path(__file__).resolve().parent / LOCKED_TEST_FILE.name,
+    ):
+        if not candidate.is_file():
+            continue
+        locked = {name: set() for name in EXPECTED_CLASSES}
+        for line in candidate.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            class_name, stem = line.split("\t", 1)
+            locked[class_name].add(stem)
+        return candidate, locked
+    return None, None
+
+
+def holdout_test(paths, generator, locked_stems=None):
+    if locked_stems is not None:
+        test_paths = [path for path in paths if path.stem in locked_stems]
+        train_paths = [path for path in paths if path.stem not in locked_stems]
+        return train_paths, test_paths
+
     permutation = torch.randperm(
         len(paths),
         generator=generator,
@@ -319,7 +347,7 @@ def main():
     dest = args.dest
     zip_path = args.zip if args.zip is not None else None
     use_zip = zip_path is not None and zip_path.is_file()
-    prepared_kind = "zip256" if use_zip else None
+    prepared_kind = "zip256-complete" if use_zip else None
 
     print(f"Split dest: {dest}", flush=True)
 
@@ -371,6 +399,9 @@ def main():
     dest_splits = split_dirs_for(dest)
     generator = torch.Generator().manual_seed(RANDOM_SEED)
     copied = {"train": 0, "validation": 0, "test": 0}
+    lock_path, locked_stems = load_locked_test_stems()
+    if lock_path is not None:
+        print(f"Using locked test stems from {lock_path}", flush=True)
 
     if "validation" in source_splits and "test" in source_splits:
         print("Using Drive train / val / test as-is.", flush=True)
@@ -392,6 +423,9 @@ def main():
     elif "validation" in source_splits:
         print(
             "Found Drive train/val. Keeping val; "
+            "using locked test photos; new train files stay in train."
+            if locked_stems is not None
+            else "Found Drive train/val. Keeping val; "
             "holding out 15% of train as test.",
             flush=True,
         )
@@ -402,9 +436,13 @@ def main():
             val_paths = image_files(val_folder)
             if not train_paths:
                 raise SystemExit(f"No images in {train_folder}")
+            class_lock = None
+            if locked_stems is not None:
+                class_lock = locked_stems[class_name]
             training_paths, test_paths = holdout_test(
                 train_paths,
                 generator,
+                class_lock,
             )
             print(
                 f"  {class_name}: {len(training_paths)} train, "
