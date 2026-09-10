@@ -58,12 +58,19 @@ def inference_transform():
 
 
 def train_transform():
-    """Same 224×224 bilinear scale as production, plus light aug."""
+    """Zoom into the object at train time, still ending at 224×224.
+
+    ImageNet and the current 99% checkpoint used a random resized crop.
+    Scale stays at least 60% of the photo so a bottle on the belt is not
+    cropped away. Eval and production still use the full-frame 224×224
+    resize in inference_transform.
+    """
     return transforms.Compose(
         [
-            transforms.Resize(
-                (INPUT_SIZE, INPUT_SIZE),
-                interpolation=transforms.InterpolationMode.BILINEAR,
+            transforms.RandomResizedCrop(
+                INPUT_SIZE,
+                scale=(0.6, 1.0),
+                ratio=(0.9, 1.1),
             ),
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(15),

@@ -165,7 +165,8 @@ if loader_options["num_workers"] > 0:
 
 weights = ResNeXt50_32X4D_Weights.DEFAULT
 
-# Train, val, test, and production all scale to 224×224 before the network.
+# Train: random 224×224 crop into the object (ImageNet-style).
+# Val/test/production: full frame scaled to 224×224.
 train_transform = build_train_transform()
 eval_transform = inference_transform()
 

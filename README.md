@@ -185,4 +185,4 @@ python predict.py --images path/to/folder --mistakes-out misclassified_predictio
 
 The checkpoint is loaded from `models/resnext50_metal_plastic.pt`, or from `resnext50_metal_plastic.pt` in the current directory if that is the file you already have.
 
-In production, scale the camera frame to 224×224 the same way (`bilinear` resize to a square, then ImageNet normalize). `predict.py` and `train.py` eval use that pipeline. Keep the original photo for storage if you want.
+In production, scale the camera frame to 224×224 (`bilinear` resize to a square, then ImageNet normalize). `predict.py` and `train.py` eval use that. Training still randomly crops into the object (at least 60% of the photo) then resizes to 224×224, which is how ImageNet trained this backbone. Keep the original photo for storage if you want.
