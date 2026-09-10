@@ -274,9 +274,28 @@ train_args = json.loads(sys.argv[2])
 run_file.write_text(
     "import json\n"
     "import runpy\n"
+    "import shutil\n"
     "import sys\n"
+    "from pathlib import Path\n"
     f"sys.argv = ['train.py'] + {json.dumps(train_args)}\n"
     "runpy.run_path('train.py', run_name='__main__')\n"
+    "src = Path('/content/models/resnext50_metal_plastic.pt')\n"
+    "if not src.is_file():\n"
+    "    raise SystemExit('train.py finished without writing the checkpoint')\n"
+    "shutil.copy2(src, Path('/content/best.pt'))\n"
+    "drive_root = Path('/content/drive/MyDrive')\n"
+    "if drive_root.is_dir():\n"
+    "    dest_dir = drive_root / 'metal-plastic-sorting'\n"
+    "    dest_dir.mkdir(parents=True, exist_ok=True)\n"
+    "    shutil.copy2(src, dest_dir / src.name)\n"
+    "    for name in (\n"
+    "        'confusion_matrix.png',\n"
+    "        'misclassified_validation.png',\n"
+    "        'misclassified_validation.txt',\n"
+    "    ):\n"
+    "        art = Path('/content') / name\n"
+    "        if art.is_file():\n"
+    "            shutil.copy2(art, dest_dir / name)\n"
     "print('COLAB_STEP_OK', flush=True)\n",
     encoding="utf-8",
 )
@@ -425,18 +444,29 @@ cleanup() {
 download_if_present() {
     local remote="$1"
     local local_path="$2"
+    # Jupyter contents is rooted at /, so VM /content/foo is content/foo.
+    # Do not use content/models/: listing that folder hangs on the 88MB .pt.
     if colab download -s "$SESSION" "$remote" "$local_path"; then
         echo "Downloaded $remote -> $local_path"
         return 0
     fi
-    if [[ "$remote" != content/* && "$remote" != /* ]]; then
-        if colab download -s "$SESSION" "content/$remote" "$local_path"; then
-            echo "Downloaded content/$remote -> $local_path"
-            return 0
-        fi
-    fi
     echo "Skip download (missing on VM): $remote"
     return 0
+}
+
+download_checkpoint() {
+    mkdir -p models
+    if colab download -s "$SESSION" content/best.pt "$MODEL_PATH"; then
+        echo "Downloaded content/best.pt -> $MODEL_PATH"
+        return 0
+    fi
+    if colab download -s "$SESSION" content/resnext50_metal_plastic.pt "$MODEL_PATH"; then
+        echo "Downloaded content/resnext50_metal_plastic.pt -> $MODEL_PATH"
+        return 0
+    fi
+    echo "Failed to download the checkpoint. It is on the VM at /content/models/." >&2
+    echo "Copy it to /content/best.pt and re-run: colab download -s $SESSION content/best.pt $MODEL_PATH" >&2
+    return 1
 }
 
 # colab status prints "not found" but still exits 0.
@@ -601,10 +631,10 @@ colab_exec "$TIMEOUT" "$RUN_FILE"
 
 mkdir -p models
 
-download_if_present "$MODEL_PATH" "$MODEL_PATH"
-download_if_present confusion_matrix.png confusion_matrix.png
-download_if_present misclassified_validation.png misclassified_validation.png
-download_if_present misclassified_validation.txt misclassified_validation.txt
+download_checkpoint
+download_if_present content/confusion_matrix.png confusion_matrix.png
+download_if_present content/misclassified_validation.png misclassified_validation.png
+download_if_present content/misclassified_validation.txt misclassified_validation.txt
 
 PHASE=done
 echo "Training finished"

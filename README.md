@@ -160,17 +160,27 @@ The first run prints a Google sign-in URL. Open it, approve access, then paste t
 
 If login fails with `Scope has changed`, re-run the command. The helper treats a reduced Google grant as a warning instead of crashing. You should not need to paste a code again once `~/.config/colab-cli/token.json` exists.
 
-With `--drive`, the helper zips only the training scripts, mounts Drive, copies photos onto the VM disk, and (if `--resume`) copies the checkpoint from Drive. Otherwise it also zips the local dataset directory. It installs `requirements-colab.txt` on the VM (PyTorch is already on Colab), then pulls back `models/resnext50_metal_plastic.pt` and the confusion-matrix artifacts. The VM is stopped when the script exits unless you pass `--keep`.
+With `--drive`, the helper zips only the training scripts, mounts Drive, copies photos onto the VM disk, and (if `--resume`) copies the checkpoint from Drive. Otherwise it also zips the local dataset directory. It installs `requirements-colab.txt` on the VM (PyTorch is already on Colab), copies the best checkpoint to `/content/best.pt` (Jupyter cannot download `content/models/*.pt`), and pulls that file plus the confusion-matrix artifacts. The VM is stopped when the script exits unless you pass `--keep`.
+
+After `fc` training, unfreeze the last residual stage on the **same** `--keep` VM:
+
+```bash
+./colab_train.sh --keep --drive --resume --unfreeze layer4 --lr 0.001 --lr-backbone 0.0001 --epochs 6
+```
+
+Do not start `layer4` until `fc` has finished and `Training finished` printed. Skip `layer3` unless `layer4` stalls.
 
 ## Predict
 
+Colab training already prints **test accuracy** on the VM `data_real` split. To score the same checkpoint on your Mac:
+
 ```bash
-python predict.py
+python train.py --eval --data-dir data_real
 python predict.py --data-dir data_real
 python predict.py --images path/to/photo.jpg path/to/folder --out predictions.png
 ```
 
-Opens a window with labeled photos. Each image shows **metal** and **plastic** percentages (not only the winner). `--images` scores any files or folders; otherwise it samples the test split. Training's test step only prints overall accuracy plus a validation confusion matrix — use `predict.py` to see scores on real photos.
+`--eval` prints validation and test accuracy without training. `predict.py` overlays **metal** and **plastic** percentages on the photos. `--images` scores any files or folders; otherwise it samples the test split. The Mac `data_real/` tree is only the photos you copied here; the Drive/Colab set is larger.
 
 The checkpoint is loaded from `models/resnext50_metal_plastic.pt`, or from `resnext50_metal_plastic.pt` in the current directory if that is the file you already have.
 

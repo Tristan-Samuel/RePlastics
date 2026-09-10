@@ -98,10 +98,22 @@ def parse_args():
             "all trains the whole network."
         ),
     )
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help=(
+            "Score validation and test only. "
+            "Does not train or overwrite the checkpoint."
+        ),
+    )
     return parser.parse_args()
 
 
 args = parse_args()
+
+if args.eval:
+    args.resume = True
+    args.epochs = 0
 
 if args.lr_backbone is None:
     args.lr_backbone = args.lr / 10
@@ -798,7 +810,8 @@ test_accuracy = (
 # Save best model
 # ---------------------------------------------------------
 
-save_checkpoint(test_accuracy=test_accuracy)
+if not args.eval:
+    save_checkpoint(test_accuracy=test_accuracy)
 
 print()
 print(
@@ -812,7 +825,10 @@ print(
     flush=True,
 )
 
-print(f"Saved model to {MODEL_PATH}", flush=True)
+if args.eval:
+    print(f"Eval only; left {MODEL_PATH} unchanged.", flush=True)
+else:
+    print(f"Saved model to {MODEL_PATH}", flush=True)
 
 create_confusion_matrix(
     model,
