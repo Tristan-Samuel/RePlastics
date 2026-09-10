@@ -140,7 +140,7 @@ To upload a local `data_real` tree instead:
 ./colab_train.sh --resume --unfreeze fc --data-dir data_real --epochs 8
 ```
 
-The first run prints a Google sign-in URL. Open it, approve access, then paste the **authorization code** (not the URL) back into the terminal. On the consent screen, allow every requested permission if Google shows them (Colab, Drive, Cloud). Drive training then prints a second URL to mount Drive: finish that Google page **before** pressing Enter, or the CLI returns HTTP 400. If mount still fails, open the Colab session in a browser, run `drive.mount('/content/drive')` in a cell, then press Enter back in the terminal. After that, the same command can be run from here without copying cells into Jupyter.
+The first run prints a Google sign-in URL. Open it, approve access, then paste the **authorization code** (not the URL) back into the terminal. Drive training then opens a second Google consent page for Drive. Finish that page, then press Enter. If that handshake still fails, a Colab tab opens: run `drive.mount('/content/drive')` in a cell and wait until the helper sees My Drive. A failed Python step now stops the helper instead of printing "Training finished".
 
 If login fails with `Scope has changed`, re-run the command. The helper treats a reduced Google grant as a warning instead of crashing. You should not need to paste a code again once `~/.config/colab-cli/token.json` exists.
 

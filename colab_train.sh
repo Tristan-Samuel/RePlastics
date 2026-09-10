@@ -183,8 +183,8 @@ RUN_FILE="$ROOT/.colab_run.py"
 EXTRACT_FILE="$ROOT/.colab_extract.py"
 PREPARE_FILE="$ROOT/.colab_prepare.py"
 CHECKPOINT_FILE="$ROOT/.colab_checkpoint.py"
-CHECK_DRIVE_FILE="$ROOT/.colab_check_drive.py"
-rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE" "$CHECK_DRIVE_FILE"
+LAST_EXEC_LOG="$ROOT/.colab_last_exec.log"
+rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE" "$LAST_EXEC_LOG"
 
 if [[ "$USE_DRIVE" -eq 1 ]]; then
     echo "Packing training scripts only. Images will come from Google Drive ($DRIVE_DIR)."
@@ -276,7 +276,8 @@ run_file.write_text(
     "import runpy\n"
     "import sys\n"
     f"sys.argv = ['train.py'] + {json.dumps(train_args)}\n"
-    "runpy.run_path('train.py', run_name='__main__')\n",
+    "runpy.run_path('train.py', run_name='__main__')\n"
+    "print('COLAB_STEP_OK', flush=True)\n",
     encoding="utf-8",
 )
 print(f"Wrote {run_file} with {train_args}")
@@ -301,7 +302,8 @@ prepare_file.write_text(
     "import sys\n"
     "sys.argv = ['prepare_drive_data.py', '--source', "
     f"{json.dumps(source)}, '--dest', '/content/data_real']\n"
-    "runpy.run_path('prepare_drive_data.py', run_name='__main__')\n",
+    "runpy.run_path('prepare_drive_data.py', run_name='__main__')\n"
+    "print('COLAB_STEP_OK', flush=True)\n",
     encoding="utf-8",
 )
 print(f"Wrote {prepare_file} for {source}")
@@ -332,7 +334,8 @@ Path(sys.argv[1]).write_text(
     "        raise SystemExit(\n"
     "            'Missing checkpoint. Copy models/resnext50_metal_plastic.pt '\n"
     "            'to MyDrive/metal-plastic-sorting/ and re-run.'\n"
-    "        )\n",
+    "        )\n"
+    "print('COLAB_STEP_OK', flush=True)\n",
     encoding="utf-8",
 )
 print("Wrote", sys.argv[1])
@@ -397,28 +400,11 @@ with zipfile.ZipFile(bundle) as archive:
 print("Extracted %s files into /content" % len(names), flush=True)
 if not Path("/content/train.py").is_file():
     raise SystemExit("Extract finished but /content/train.py is missing")
-PY
-
-python3 - "$CHECK_DRIVE_FILE" <<'PY'
-from pathlib import Path
-import sys
-
-Path(sys.argv[1]).write_text(
-    "from pathlib import Path\n"
-    "root = Path('/content/drive/MyDrive')\n"
-    "if root.is_dir():\n"
-    "    print('DRIVE_MOUNTED', flush=True)\n"
-    "    for child in sorted(root.iterdir())[:20]:\n"
-    "        print(' ', child.name, flush=True)\n"
-    "else:\n"
-    "    print('DRIVE_NOT_MOUNTED', flush=True)\n",
-    encoding="utf-8",
-)
-print("Wrote", sys.argv[1])
+print("COLAB_STEP_OK", flush=True)
 PY
 
 cleanup() {
-    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE" "$CHECK_DRIVE_FILE"
+    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE" "$LAST_EXEC_LOG"
     if [[ "${KEEP:-0}" -eq 1 ]]; then
         echo "Leaving session $SESSION running (--keep)"
         return
@@ -457,7 +443,14 @@ colab_session_is_up() {
 colab_exec() {
     local timeout="$1"
     local file="$2"
-    colab exec -s "$SESSION" --timeout "$timeout" -f "$file"
+    set +e
+    colab exec -s "$SESSION" --timeout "$timeout" -f "$file" 2>&1 | tee "$LAST_EXEC_LOG"
+    set -e
+    if grep -q 'COLAB_STEP_OK' "$LAST_EXEC_LOG"; then
+        return 0
+    fi
+    echo "Colab step failed. The VM Python never printed COLAB_STEP_OK." >&2
+    return 1
 }
 
 vm_ls() {
@@ -491,13 +484,6 @@ upload_bundle() {
     python3 colab_upload.py "$SESSION" "$BUNDLE" content/colab_bundle.part
 }
 
-drive_is_mounted() {
-    local output
-    output="$(colab_exec 60 "$CHECK_DRIVE_FILE" 2>&1)" || true
-    printf '%s\n' "$output"
-    printf '%s\n' "$output" | grep -q DRIVE_MOUNTED
-}
-
 ensure_scripts_on_vm() {
     if vm_has 'train.py'; then
         echo "Training scripts already on the VM; skipping upload."
@@ -507,44 +493,12 @@ ensure_scripts_on_vm() {
     upload_bundle
     PHASE=uploaded
     echo "Extracting training scripts on the VM"
-    colab_exec 120 "$EXTRACT_FILE" || true
-    if ! vm_has 'train.py'; then
-        echo "Extract failed. Files currently on the VM:" >&2
-        vm_ls >&2
-        exit 1
-    fi
+    colab_exec 120 "$EXTRACT_FILE"
 }
 
 mount_google_drive() {
-    if drive_is_mounted; then
-        echo "Google Drive is already mounted"
-        return
-    fi
-
-    echo "Mounting Google Drive."
-    echo "Colab will print a URL. Open it, finish the Google consent page,"
-    echo "and wait until that page says you can close it. Then press Enter."
-    echo "Pressing Enter too early causes a 400 and the mount fails."
-    colab drivemount -s "$SESSION" || true
-    if drive_is_mounted; then
-        return
-    fi
-
-    echo "CLI Drive mount did not finish. Open the Colab session in a browser:"
-    colab url -s "$SESSION" || true
-    echo "In a notebook cell run:"
-    echo "  from google.colab import drive"
-    echo "  drive.mount('/content/drive')"
-    echo "Press Enter here after My Drive is visible on the VM."
-    if [[ -r /dev/tty ]]; then
-        IFS= read -r _ </dev/tty || true
-    else
-        IFS= read -r _ || true
-    fi
-    if ! drive_is_mounted; then
-        echo "Google Drive is still not mounted at /content/drive/MyDrive." >&2
-        exit 1
-    fi
+    echo "Mounting Google Drive on the VM..."
+    "$COLAB_PY" "$ROOT/colab_drivemount.py" "$SESSION"
 }
 
 stage_checkpoint_on_drive() {
@@ -600,28 +554,17 @@ elif vm_has 'train.py'; then
 elif vm_has 'colab_bundle'; then
     echo "Found a previous bundle on the VM; extracting it instead of uploading again."
     PHASE=uploaded
-    colab_exec 120 "$EXTRACT_FILE" || true
-    if ! vm_has 'train.py'; then
+    if ! colab_exec 120 "$EXTRACT_FILE"; then
         echo "Extract failed; uploading a fresh bundle."
         upload_bundle
-        colab_exec 120 "$EXTRACT_FILE" || true
-        if ! vm_has 'train.py'; then
-            echo "Extract failed. Files currently on the VM:" >&2
-            vm_ls >&2
-            exit 1
-        fi
+        colab_exec 120 "$EXTRACT_FILE"
     fi
 else
     echo "Uploading local dataset (this is the slow path; prefer --drive)"
     upload_bundle
     PHASE=uploaded
     echo "Extracting training bundle on the VM"
-    colab_exec 120 "$EXTRACT_FILE" || true
-    if ! vm_has 'train.py'; then
-        echo "Extract failed. Files currently on the VM:" >&2
-        vm_ls >&2
-        exit 1
-    fi
+    colab_exec 120 "$EXTRACT_FILE"
 fi
 
 echo "Installing Python packages (Colab already has CUDA PyTorch)"
