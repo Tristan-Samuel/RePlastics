@@ -129,10 +129,10 @@ The official [Colab CLI](https://github.com/googlecolab/google-colab-cli) can pr
 
 ```bash
 chmod +x colab_train.sh
-./colab_train.sh --drive --resume --unfreeze fc --epochs 8
+./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 6
 ```
 
-That mounts Google Drive, copies `train/NonPlastic` and `train/Plastic` onto the VM disk as **metal** / **plastic**, and keeps Drive `val/` as validation while holding out 15% of train as test. Drive originals are not moved. The copy is the slow step; after that the T4 reads local files. Override the folder with `--drive-dir`.
+If `MyDrive/stage1_binary_v2_256.zip` exists, that 256px zip is copied onto the VM and unzipped. Otherwise the helper copies full-size Drive photos file by file. Drive originals are not moved. After ingest, `--keep` leaves `/content/data_real` so later `--unfreeze` / `--lr` runs skip ingest.
 
 Fine-tune on the **same VM** without copying again:
 

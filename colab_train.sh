@@ -296,17 +296,19 @@ import sys
 
 prepare_file = Path(sys.argv[1])
 source = sys.argv[2]
+zip_path = "/content/drive/MyDrive/stage1_binary_v2_256.zip"
 prepare_file.write_text(
     "import json\n"
     "import runpy\n"
     "import sys\n"
     "sys.argv = ['prepare_drive_data.py', '--source', "
-    f"{json.dumps(source)}, '--dest', '/content/data_real']\n"
+    f"{json.dumps(source)}, '--zip', {json.dumps(zip_path)}, "
+    "'--dest', '/content/data_real']\n"
     "runpy.run_path('prepare_drive_data.py', run_name='__main__')\n"
     "print('COLAB_STEP_OK', flush=True)\n",
     encoding="utf-8",
 )
-print(f"Wrote {prepare_file} for {source}")
+print(f"Wrote {prepare_file} for {source} (zip {zip_path})")
 PY
 
 python3 - "$CHECKPOINT_FILE" <<'PY'
@@ -545,7 +547,7 @@ if [[ "$USE_DRIVE" -eq 1 ]]; then
     ensure_scripts_on_vm
     PHASE=uploaded
     mount_google_drive
-    echo "Copying Drive photos onto the VM disk (skipped if a local copy already exists)"
+    echo "Preparing photos on the VM (256px zip if present, else Drive copy)"
     colab_exec 3600 "$PREPARE_FILE"
     if [[ "$RESUME" -eq 1 ]]; then
         echo "Copying checkpoint from Drive onto the VM"

@@ -19,6 +19,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 import shutil
+import zipfile
 
 import torch
 
@@ -57,7 +58,7 @@ def parse_args():
     parser.add_argument(
         "--source",
         type=Path,
-        required=True,
+        default=None,
         help=(
             "Drive dataset root, e.g. "
             "/content/drive/MyDrive/stage1_binary_v2"
@@ -68,6 +69,15 @@ def parse_args():
         type=Path,
         default=Path("/content/data_real"),
         help="Where to write the metal/plastic split tree.",
+    )
+    parser.add_argument(
+        "--zip",
+        type=Path,
+        default=None,
+        help=(
+            "Optional zip of train/val photos (preferred over "
+            "copying each Drive file)."
+        ),
     )
     parser.add_argument(
         "--force",
@@ -150,9 +160,14 @@ def tree_uses_symlinks(root):
     return any(path.is_symlink() for path in root.rglob("*"))
 
 
-def local_copy_ready(dest):
+def local_copy_ready(dest, expected_kind=None):
     if not dest.is_dir() or tree_uses_symlinks(dest):
         return False
+
+    if expected_kind is not None:
+        marker = dest / ".prepared_from"
+        if not marker.is_file() or marker.read_text().strip() != expected_kind:
+            return False
 
     for split_name in ("train", "validation", "test"):
         for class_name in EXPECTED_CLASSES:
@@ -262,16 +277,56 @@ def resolve_source(source):
     )
 
 
+def find_dataset_root(root):
+    root = Path(root)
+    candidates = [root, *sorted(root.rglob("*"))]
+    for candidate in candidates:
+        if not candidate.is_dir():
+            continue
+        folders = mapped_class_folders(candidate / "train")
+        if "metal" in folders and "plastic" in folders:
+            return candidate
+    raise FileNotFoundError(
+        f"No train/NonPlastic and train/Plastic under {root}."
+    )
+
+
+def unpack_zip(zip_path):
+    zip_path = Path(zip_path)
+    local_zip = Path("/content") / zip_path.name
+    print(f"Using dataset zip {zip_path}", flush=True)
+    if zip_path.resolve() != local_zip.resolve():
+        print("Copying zip onto the VM disk...", flush=True)
+        shutil.copy2(zip_path, local_zip)
+        print(f"  {local_zip.stat().st_size / (1024 * 1024):.1f} MB", flush=True)
+
+    extract_root = Path("/content/stage1_unzip")
+    if extract_root.exists():
+        shutil.rmtree(extract_root)
+    extract_root.mkdir(parents=True)
+
+    print(f"Unzipping {local_zip}...", flush=True)
+    with zipfile.ZipFile(local_zip) as archive:
+        archive.extractall(extract_root)
+
+    source = find_dataset_root(extract_root)
+    print(f"Unzipped dataset root: {source}", flush=True)
+    return source
+
+
 def main():
     args = parse_args()
     dest = args.dest
+    zip_path = args.zip if args.zip is not None else None
+    use_zip = zip_path is not None and zip_path.is_file()
+    prepared_kind = "zip256" if use_zip else None
 
     print(f"Split dest: {dest}", flush=True)
 
-    if not args.force and local_copy_ready(dest):
+    if not args.force and local_copy_ready(dest, expected_kind=prepared_kind):
         copied = count_split_files(dest)
         print(
-            f"{dest} already has a local copy. Skipping Drive copy.",
+            f"{dest} already has a local copy. Skipping ingest.",
             flush=True,
         )
         print(f"  train: {copied['train']}", flush=True)
@@ -279,8 +334,13 @@ def main():
         print(f"  test: {copied['test']}", flush=True)
         return
 
-    source = resolve_source(args.source)
-    print(f"Drive source: {source}", flush=True)
+    if use_zip:
+        source = unpack_zip(zip_path)
+    elif args.source is not None:
+        source = resolve_source(args.source)
+        print(f"Drive source: {source}", flush=True)
+    else:
+        raise SystemExit("Pass --zip or --source.")
 
     source_splits = discover_source_splits(source)
     if "train" not in source_splits:
@@ -411,6 +471,8 @@ def main():
     print(f"  train: {copied['train']}", flush=True)
     print(f"  validation: {copied['validation']}", flush=True)
     print(f"  test: {copied['test']}", flush=True)
+    if prepared_kind:
+        (dest / ".prepared_from").write_text(prepared_kind + "\n", encoding="utf-8")
     print(
         "Original Drive files are unchanged. "
         "NonPlastic is mapped to metal. "
