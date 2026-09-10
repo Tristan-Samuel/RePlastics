@@ -358,11 +358,14 @@ def main():
         print(f"Replacing existing {dest}", flush=True)
         shutil.rmtree(dest)
 
-    print(
-        "Copying photos from Drive onto the VM disk. "
-        "This is a one-time wait for this session.",
-        flush=True,
-    )
+    if use_zip:
+        print("Linking the unzipped 256px photos into train/val/test.", flush=True)
+    else:
+        print(
+            "Copying photos from Drive onto the VM disk. "
+            "This is a one-time wait for this session.",
+            flush=True,
+        )
 
     ensure_split_layout(dest)
     dest_splits = split_dirs_for(dest)

@@ -21,11 +21,15 @@ from trashnet import (
 
 DEFAULT_MODEL_PATH = Path("models/resnext50_metal_plastic.pt")
 LEGACY_MODEL_PATH = Path("resnext50_metal_plastic.pt")
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Show predictions on random test images."
+        description=(
+            "Score photos and overlay metal/plastic "
+            "percentages on the images."
+        ),
     )
     parser.add_argument(
         "--data-dir",
@@ -33,8 +37,36 @@ def parse_args():
         default=Path("data"),
         help=(
             "Dataset root with train/validation/test "
-            "class folders."
+            "class folders. Used when --images is omitted."
         ),
+    )
+    parser.add_argument(
+        "--images",
+        type=Path,
+        nargs="+",
+        default=None,
+        help=(
+            "Photo files or folders to score. "
+            "Folders are searched recursively. "
+            "Skips the test-split layout."
+        ),
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=9,
+        help="How many photos to show (default: 9).",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Optional path to save the labeled grid PNG.",
+    )
+    parser.add_argument(
+        "--no-show",
+        action="store_true",
+        help="Save/print only; do not open a window.",
     )
     parser.add_argument(
         "--model",
@@ -61,7 +93,7 @@ elif LEGACY_MODEL_PATH.exists():
 else:
     MODEL_PATH = DEFAULT_MODEL_PATH
 
-DISPLAY_COUNT = 9
+DISPLAY_COUNT = max(1, args.count)
 CELL_SIZE = 360
 
 FONT_CANDIDATES = [
@@ -72,7 +104,7 @@ FONT_CANDIDATES = [
 ]
 
 
-def label_font(size=22):
+def label_font(size=20):
     for font_path in FONT_CANDIDATES:
         if Path(font_path).exists():
             return ImageFont.truetype(font_path, size)
@@ -130,6 +162,21 @@ def paint_overlay(canvas, text):
     return canvas.convert("RGB")
 
 
+def collect_image_paths(locations):
+    paths = []
+    for location in locations:
+        if location.is_file():
+            if location.suffix.lower() in IMAGE_SUFFIXES:
+                paths.append(location)
+            continue
+        if not location.is_dir():
+            raise FileNotFoundError(f"No such file or folder: {location}")
+        for path in sorted(location.rglob("*")):
+            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES:
+                paths.append(path)
+    return paths
+
+
 # ---------------------------------------------------------
 # Device
 # ---------------------------------------------------------
@@ -185,43 +232,51 @@ model.eval()
 
 
 # ---------------------------------------------------------
-# Random test images
+# Images to score
 # ---------------------------------------------------------
-
-assert_split_layout(args.data_dir)
-test_dir = split_dirs_for(args.data_dir)["test"]
 
 weights = ResNeXt50_32X4D_Weights.DEFAULT
 preprocess = weights.transforms()
 
-test_paths = [
-    path
-    for class_name in EXPECTED_CLASSES
-    for path in sorted((test_dir / class_name).iterdir())
-    if path.is_file()
-    and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
-]
+if args.images:
+    test_paths = collect_image_paths(args.images)
+    source_label = "selected photos"
+else:
+    assert_split_layout(args.data_dir)
+    test_dir = split_dirs_for(args.data_dir)["test"]
+    test_paths = [
+        path
+        for class_name in EXPECTED_CLASSES
+        for path in sorted((test_dir / class_name).iterdir())
+        if path.is_file()
+        and path.suffix.lower() in IMAGE_SUFFIXES
+    ]
+    source_label = f"{test_dir} (random test split)"
 
 if not test_paths:
     raise FileNotFoundError(
-        f"No test images found in {test_dir}."
+        "No images found. Pass --images or a dataset with a test split."
     )
 
 sample_count = min(DISPLAY_COUNT, len(test_paths))
-sample_paths = random.sample(test_paths, sample_count)
+if args.images and len(test_paths) <= DISPLAY_COUNT:
+    sample_paths = test_paths
+    sample_count = len(sample_paths)
+else:
+    sample_paths = random.sample(test_paths, sample_count)
 
 
 # ---------------------------------------------------------
 # Predict and popup
 # ---------------------------------------------------------
 
-rows = 3
-columns = 3
+rows = int(np.ceil(sample_count / 3))
+columns = min(3, sample_count)
 
 figure, axes = plt.subplots(
     rows,
     columns,
-    figsize=(10, 10),
+    figsize=(3.4 * columns, 3.4 * rows),
     layout="constrained",
 )
 
@@ -244,18 +299,20 @@ with torch.no_grad():
             dim=1,
         )[0]
 
-        confidence, predicted_index = (
-            probabilities.max(dim=0)
+        ranked = sorted(
+            (
+                (idx_to_class[index], probabilities[index].item())
+                for index in range(probabilities.numel())
+            ),
+            key=lambda item: item[1],
+            reverse=True,
         )
 
-        predicted_class = idx_to_class[
-            predicted_index.item()
+        overlay_lines = [
+            f"{name}  {score:.0%}"
+            for name, score in ranked
         ]
-
-        overlay_text = (
-            f"{predicted_class}\n"
-            f"{confidence.item():.0%}"
-        )
+        overlay_text = "\n".join(overlay_lines)
         cell = paint_overlay(
             square_cell(image),
             overlay_text,
@@ -269,14 +326,26 @@ with torch.no_grad():
         axis.set_axis_off()
         axis.set_aspect("equal")
 
-        print(
-            f"{image_path.name}: "
-            f"{predicted_class} "
-            f"({confidence.item():.2%})"
+        detail = " | ".join(
+            f"{name} {score:.2%}"
+            for name, score in ranked
         )
+        print(f"{image_path}: {detail}")
 
 for axis in axes[sample_count:]:
     axis.set_axis_off()
 
-figure.suptitle("Random test predictions", fontsize=16)
-plt.show()
+figure.suptitle(
+    f"Predictions with class percentages\n{source_label}",
+    fontsize=14,
+)
+
+if args.out is not None:
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(args.out, dpi=160)
+    print(f"Wrote {args.out}")
+
+if not args.no_show:
+    plt.show()
+else:
+    plt.close(figure)

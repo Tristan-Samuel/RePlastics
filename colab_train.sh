@@ -449,17 +449,38 @@ colab_session_is_up() {
     printf '%s\n' "$output" | grep -Eq 'IDLE|BUSY|READY'
 }
 
+revive_colab_kernel() {
+    echo "Colab kernel looks wedged (Timeout waiting for output)."
+    echo "Restarting the kernel. The VM disk stays, including /content/data_real."
+    colab restart-kernel -s "$SESSION" || true
+    echo "Waiting for a fresh kernel..."
+    sleep 8
+}
+
 colab_exec() {
     local timeout="$1"
     local file="$2"
-    set +e
-    colab exec -s "$SESSION" --timeout "$timeout" -f "$file" 2>&1 | tee "$LAST_EXEC_LOG"
-    set -e
-    if grep -q 'COLAB_STEP_OK' "$LAST_EXEC_LOG"; then
-        return 0
-    fi
-    echo "Colab step failed. The VM Python never printed COLAB_STEP_OK." >&2
-    return 1
+    local attempt=1
+    while true; do
+        set +e
+        colab exec -s "$SESSION" --timeout "$timeout" -f "$file" 2>&1 | tee "$LAST_EXEC_LOG"
+        set -e
+        if grep -q 'COLAB_STEP_OK' "$LAST_EXEC_LOG"; then
+            return 0
+        fi
+        if grep -q 'Timeout waiting for output' "$LAST_EXEC_LOG" && [[ "$attempt" -lt 3 ]]; then
+            revive_colab_kernel
+            attempt=$((attempt + 1))
+            continue
+        fi
+        echo "Colab step failed. The VM Python never printed COLAB_STEP_OK." >&2
+        if grep -q 'Timeout waiting for output' "$LAST_EXEC_LOG"; then
+            echo "Kernel still dead after restart. Stop the session and start a new T4:" >&2
+            echo "  colab stop -s $SESSION" >&2
+            echo "  ./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 6" >&2
+        fi
+        return 1
+    done
 }
 
 vm_ls() {

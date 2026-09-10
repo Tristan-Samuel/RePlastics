@@ -143,6 +143,13 @@ Fine-tune on the **same VM** without copying again:
 
 `--keep` leaves the T4 up so `/content/data_real` survives. Changing `--unfreeze` or the learning rate still runs a short validation pass first (now with batch logs). That pass is seconds on local disk, not minutes on Drive. If you stop the session, the VM disk is wiped and the next `--drive` run copies photos once more.
 
+If `colab exec` dies with `Timeout waiting for output` (often after Ctrl+C), the kernel is wedged, not the photos. The helper now restarts that kernel and retries. If it still times out:
+
+```bash
+colab stop -s trainer
+./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 6
+```
+
 To upload a local `data_real` tree instead:
 
 ```bash
@@ -160,6 +167,11 @@ With `--drive`, the helper zips only the training scripts, mounts Drive, copies 
 ```bash
 python predict.py
 python predict.py --data-dir data_real
+python predict.py --images path/to/photo.jpg path/to/folder --out predictions.png
 ```
 
-Opens a window with 9 random test images. Each photo is labeled with the predicted class and confidence. The checkpoint is loaded from `models/resnext50_metal_plastic.pt`, or from `resnext50_metal_plastic.pt` in the current directory if that is the file you already have.
+Opens a window with labeled photos. Each image shows **metal** and **plastic** percentages (not only the winner). `--images` scores any files or folders; otherwise it samples the test split. Training's test step only prints overall accuracy plus a validation confusion matrix — use `predict.py` to see scores on real photos.
+
+The checkpoint is loaded from `models/resnext50_metal_plastic.pt`, or from `resnext50_metal_plastic.pt` in the current directory if that is the file you already have.
+
+In production, send the camera frame through the same ImageNet 224×224 preprocess `predict.py` uses. Do not add a separate downscale-to-256 step first: the model never sees the original pixels at full size anyway, and a second resize changes the crop. Keep the original photo for storage if you want; only the tensor fed to the network should match training.
