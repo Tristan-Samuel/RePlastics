@@ -21,12 +21,17 @@ from sklearn.metrics import (
 )
 from torch import nn
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
+from torchvision import datasets
 from torchvision.models import (
     resnext50_32x4d,
     ResNeXt50_32X4D_Weights,
 )
 
+from preprocess import (
+    inference_transform,
+    load_rgb,
+    train_transform as build_train_transform,
+)
 from trashnet import (
     EXPECTED_CLASSES,
     assert_split_layout,
@@ -143,6 +148,7 @@ else:
 print(f"Using device: {device}", flush=True)
 print(f"Data dir: {args.data_dir}", flush=True)
 print(f"Unfreeze: {args.unfreeze}", flush=True)
+print("Network input: 224x224", flush=True)
 
 loader_options = {
     "batch_size": BATCH_SIZE,
@@ -159,21 +165,10 @@ if loader_options["num_workers"] > 0:
 
 weights = ResNeXt50_32X4D_Weights.DEFAULT
 
-train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(224),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(15),
-
-    transforms.ToTensor(),
-
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225],
-    ),
-])
-
-# For validation and testing, don't randomly modify the images.
-eval_transform = weights.transforms()
+# Files on disk can be any size. The tensor the network sees is always 224×224,
+# same as ImageNet pretraining and the production camera path.
+train_transform = build_train_transform()
+eval_transform = inference_transform()
 
 
 # ---------------------------------------------------------
@@ -186,16 +181,19 @@ split_dirs = split_dirs_for(args.data_dir)
 training_images = datasets.ImageFolder(
     split_dirs["train"],
     transform=train_transform,
+    loader=load_rgb,
 )
 
 validation_images = datasets.ImageFolder(
     split_dirs["validation"],
     transform=eval_transform,
+    loader=load_rgb,
 )
 
 test_images = datasets.ImageFolder(
     split_dirs["test"],
     transform=eval_transform,
+    loader=load_rgb,
 )
 
 print("Classes:", training_images.classes, flush=True)

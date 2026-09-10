@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Resize stage1_binary_v2 to 256px on the long side and zip it.
+"""Resize stage1_binary_v2 to 224×224 (ImageNet / production size) and zip it.
 
 Reads the live Drive folder (train/val, NonPlastic/Plastic), drops exact
 train copies of files that already sit in val, writes JPEGs to
-~/Downloads/stage1_binary_v2_256, and creates a store-only zip.
+~/Downloads/stage1_binary_v2_256, and creates a store-only zip. The folder
+name is historical; files inside are 224×224.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ DRIVE_ZIP = Path(
     "/Users/tristan/Library/CloudStorage/GoogleDrive-intern"
     "@replasticrecycle.com/My Drive/stage1_binary_v2_256.zip"
 )
-LONG_SIDE = 256
+LONG_SIDE = 224
 JPEG_QUALITY = 90
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 CLASS_FOLDERS = (
@@ -99,20 +100,10 @@ def resize_one(job):
             image = image.convert("RGB")
         elif image.mode == "L":
             image = image.convert("RGB")
-        width, height = image.size
-        longest = max(width, height)
-        if longest > long_side:
-            if width >= height:
-                new_size = (
-                    long_side,
-                    max(1, int(height * long_side / width)),
-                )
-            else:
-                new_size = (
-                    max(1, int(width * long_side / height)),
-                    long_side,
-                )
-            image = image.resize(new_size, Image.Resampling.LANCZOS)
+        image = image.resize(
+            (long_side, long_side),
+            Image.Resampling.LANCZOS,
+        )
         image.save(
             destination,
             format="JPEG",
@@ -147,8 +138,8 @@ def main():
     ]
     workers = min(4, os.cpu_count() or 4)
     print(
-        f"Resizing {len(jobs)} images -> {DEST_ROOT} "
-        f"({workers} workers, long side {LONG_SIDE})",
+        f"Resizing {len(jobs)} images to {LONG_SIDE}x{LONG_SIDE} -> {DEST_ROOT} "
+        f"({workers} workers)",
         flush=True,
     )
 

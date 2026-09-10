@@ -6,12 +6,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch import nn
-from PIL import Image, ImageDraw, ImageFont, ImageOps
-from torchvision.models import (
-    resnext50_32x4d,
-    ResNeXt50_32X4D_Weights,
-)
+from PIL import ImageDraw, ImageFont
+from torchvision.models import resnext50_32x4d
 
+from preprocess import (
+    inference_transform,
+    load_rgb,
+    tensor_to_display,
+    true_class_from_path,
+)
 from trashnet import (
     EXPECTED_CLASSES,
     assert_split_layout,
@@ -22,13 +25,14 @@ from trashnet import (
 DEFAULT_MODEL_PATH = Path("models/resnext50_metal_plastic.pt")
 LEGACY_MODEL_PATH = Path("resnext50_metal_plastic.pt")
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+VALIDATION_MISTAKES_PNG = Path("misclassified_validation.png")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Score photos and overlay metal/plastic "
-            "percentages on the images."
+            "Score 224×224 model inputs and overlay "
+            "metal/plastic percentages."
         ),
     )
     parser.add_argument(
@@ -55,13 +59,28 @@ def parse_args():
         "--count",
         type=int,
         default=9,
-        help="How many photos to show (default: 9).",
+        help="How many photos to show (default: 9). Ignored with --mistakes-out.",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Score every image instead of a random sample.",
     )
     parser.add_argument(
         "--out",
         type=Path,
         default=None,
         help="Optional path to save the labeled grid PNG.",
+    )
+    parser.add_argument(
+        "--mistakes-out",
+        type=Path,
+        default=None,
+        help=(
+            "Score every labeled image and write only the "
+            "errors to this PNG. Never writes "
+            "misclassified_validation.png."
+        ),
     )
     parser.add_argument(
         "--no-show",
@@ -84,6 +103,13 @@ def parse_args():
 
 args = parse_args()
 
+if args.mistakes_out is not None:
+    if args.mistakes_out.resolve() == VALIDATION_MISTAKES_PNG.resolve():
+        raise SystemExit(
+            "Refusing to overwrite misclassified_validation.png. "
+            "Pass a different --mistakes-out path."
+        )
+
 if args.model is not None:
     MODEL_PATH = args.model
 elif DEFAULT_MODEL_PATH.exists():
@@ -93,9 +119,6 @@ elif LEGACY_MODEL_PATH.exists():
 else:
     MODEL_PATH = DEFAULT_MODEL_PATH
 
-DISPLAY_COUNT = max(1, args.count)
-CELL_SIZE = 360
-
 FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -104,7 +127,7 @@ FONT_CANDIDATES = [
 ]
 
 
-def label_font(size=20):
+def label_font(size=16):
     for font_path in FONT_CANDIDATES:
         if Path(font_path).exists():
             return ImageFont.truetype(font_path, size)
@@ -112,27 +135,7 @@ def label_font(size=20):
     return ImageFont.load_default()
 
 
-def square_cell(image):
-    """Keep the photo upright and unstretched in a square tile."""
-    image = ImageOps.exif_transpose(image).convert("RGB")
-    fitted = ImageOps.contain(
-        image,
-        (CELL_SIZE, CELL_SIZE),
-        Image.Resampling.LANCZOS,
-    )
-    canvas = Image.new("RGB", (CELL_SIZE, CELL_SIZE), (20, 20, 20))
-    canvas.paste(
-        fitted,
-        (
-            (CELL_SIZE - fitted.width) // 2,
-            (CELL_SIZE - fitted.height) // 2,
-        ),
-    )
-    return canvas
-
-
 def paint_overlay(canvas, text):
-    """Draw the prediction on the photo so it cannot drift off the image."""
     canvas = canvas.convert("RGBA")
     draw = ImageDraw.Draw(canvas, "RGBA")
     font = label_font()
@@ -140,16 +143,16 @@ def paint_overlay(canvas, text):
         (0, 0),
         text,
         font=font,
-        spacing=4,
+        spacing=2,
     )
     text_width = right - left
     text_height = bottom - top
-    pad = 8
-    x = 12
-    y = 12
+    pad = 6
+    x = 4
+    y = 4
     draw.rounded_rectangle(
         [x, y, x + text_width + 2 * pad, y + text_height + 2 * pad],
-        radius=8,
+        radius=6,
         fill=(0, 0, 0, 180),
     )
     draw.multiline_text(
@@ -157,7 +160,7 @@ def paint_overlay(canvas, text):
         text,
         font=font,
         fill="white",
-        spacing=4,
+        spacing=2,
     )
     return canvas.convert("RGB")
 
@@ -177,9 +180,43 @@ def collect_image_paths(locations):
     return paths
 
 
-# ---------------------------------------------------------
-# Device
-# ---------------------------------------------------------
+def overlay_text(ranked, true_class=None):
+    lines = [f"{name}  {score:.0%}" for name, score in ranked]
+    if true_class is not None:
+        lines.append(f"true {true_class}")
+    return "\n".join(lines)
+
+
+def save_grid(cells, title, out_path, show):
+    sample_count = len(cells)
+    if sample_count == 0:
+        print("No images to plot.")
+        return
+    columns = min(4, sample_count)
+    rows = int(np.ceil(sample_count / columns))
+    figure, axes = plt.subplots(
+        rows,
+        columns,
+        figsize=(2.6 * columns, 2.6 * rows),
+        layout="constrained",
+    )
+    axes = np.atleast_1d(axes).ravel()
+    for axis, cell in zip(axes, cells):
+        axis.imshow(np.asarray(cell), origin="upper", interpolation="nearest")
+        axis.set_axis_off()
+        axis.set_aspect("equal")
+    for axis in axes[sample_count:]:
+        axis.set_axis_off()
+    figure.suptitle(title, fontsize=12)
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(out_path, dpi=160)
+        print(f"Wrote {out_path}")
+    if show:
+        plt.show()
+    else:
+        plt.close(figure)
+
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -188,11 +225,6 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
-
-# ---------------------------------------------------------
-# Load checkpoint
-# ---------------------------------------------------------
-
 checkpoint = torch.load(
     MODEL_PATH,
     map_location=device,
@@ -200,105 +232,57 @@ checkpoint = torch.load(
 )
 
 class_to_idx = checkpoint["class_to_idx"]
-
 idx_to_class = {
     index: name
     for name, index in class_to_idx.items()
 }
 
-
-# ---------------------------------------------------------
-# Re-create model architecture
-# ---------------------------------------------------------
-
-model = resnext50_32x4d(
-    weights=None
-)
-
-number_of_features = model.fc.in_features
-
-model.fc = nn.Linear(
-    number_of_features,
-    2,
-)
-
-model.load_state_dict(
-    checkpoint["model_state_dict"]
-)
-
+model = resnext50_32x4d(weights=None)
+model.fc = nn.Linear(model.fc.in_features, 2)
+model.load_state_dict(checkpoint["model_state_dict"])
 model = model.to(device)
-
 model.eval()
 
-
-# ---------------------------------------------------------
-# Images to score
-# ---------------------------------------------------------
-
-weights = ResNeXt50_32X4D_Weights.DEFAULT
-preprocess = weights.transforms()
+preprocess = inference_transform()
 
 if args.images:
-    test_paths = collect_image_paths(args.images)
+    image_paths = collect_image_paths(args.images)
     source_label = "selected photos"
 else:
     assert_split_layout(args.data_dir)
     test_dir = split_dirs_for(args.data_dir)["test"]
-    test_paths = [
+    image_paths = [
         path
         for class_name in EXPECTED_CLASSES
         for path in sorted((test_dir / class_name).iterdir())
-        if path.is_file()
-        and path.suffix.lower() in IMAGE_SUFFIXES
+        if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
     ]
-    source_label = f"{test_dir} (random test split)"
+    source_label = f"{test_dir} (test split)"
 
-if not test_paths:
+if not image_paths:
     raise FileNotFoundError(
         "No images found. Pass --images or a dataset with a test split."
     )
 
-sample_count = min(DISPLAY_COUNT, len(test_paths))
-if args.images and len(test_paths) <= DISPLAY_COUNT:
-    sample_paths = test_paths
-    sample_count = len(sample_paths)
+report_mistakes = args.mistakes_out is not None
+if report_mistakes or args.all:
+    sample_paths = image_paths
 else:
-    sample_paths = random.sample(test_paths, sample_count)
+    sample_count = min(max(1, args.count), len(image_paths))
+    if args.images and len(image_paths) <= sample_count:
+        sample_paths = image_paths
+    else:
+        sample_paths = random.sample(image_paths, sample_count)
 
-
-# ---------------------------------------------------------
-# Predict and popup
-# ---------------------------------------------------------
-
-rows = int(np.ceil(sample_count / 3))
-columns = min(3, sample_count)
-
-figure, axes = plt.subplots(
-    rows,
-    columns,
-    figsize=(3.4 * columns, 3.4 * rows),
-    layout="constrained",
-)
-
-axes = np.atleast_1d(axes).ravel()
+mistakes = []
+cells = []
 
 with torch.no_grad():
-
-    for axis, image_path in zip(axes, sample_paths):
-
-        image = Image.open(image_path)
-
-        image_tensor = preprocess(image.convert("RGB"))
-        image_tensor = image_tensor.unsqueeze(0)
-        image_tensor = image_tensor.to(device)
-
-        logits = model(image_tensor)
-
-        probabilities = torch.softmax(
-            logits,
-            dim=1,
-        )[0]
-
+    for image_path in sample_paths:
+        image = load_rgb(image_path)
+        image_tensor = preprocess(image).to(device)
+        logits = model(image_tensor.unsqueeze(0))
+        probabilities = torch.softmax(logits, dim=1)[0]
         ranked = sorted(
             (
                 (idx_to_class[index], probabilities[index].item())
@@ -307,45 +291,81 @@ with torch.no_grad():
             key=lambda item: item[1],
             reverse=True,
         )
-
-        overlay_lines = [
-            f"{name}  {score:.0%}"
-            for name, score in ranked
-        ]
-        overlay_text = "\n".join(overlay_lines)
-        cell = paint_overlay(
-            square_cell(image),
-            overlay_text,
-        )
-
-        axis.imshow(
-            np.asarray(cell),
-            origin="upper",
-            interpolation="bilinear",
-        )
-        axis.set_axis_off()
-        axis.set_aspect("equal")
-
+        predicted_class, confidence = ranked[0]
+        true_class = true_class_from_path(image_path)
         detail = " | ".join(
-            f"{name} {score:.2%}"
-            for name, score in ranked
+            f"{name} {score:.2%}" for name, score in ranked
         )
-        print(f"{image_path}: {detail}")
+        if true_class is not None:
+            print(f"{image_path}: {detail} | true {true_class}")
+        else:
+            print(f"{image_path}: {detail}")
 
-for axis in axes[sample_count:]:
-    axis.set_axis_off()
+        is_mistake = (
+            true_class is not None and predicted_class != true_class
+        )
+        if is_mistake:
+            mistakes.append(
+                {
+                    "path": image_path,
+                    "true": true_class,
+                    "predicted": predicted_class,
+                    "confidence": confidence,
+                    "ranked": ranked,
+                    "tensor": image_tensor.detach().cpu(),
+                }
+            )
 
-figure.suptitle(
-    f"Predictions with class percentages\n{source_label}",
-    fontsize=14,
-)
+        if not report_mistakes:
+            cells.append(
+                paint_overlay(
+                    tensor_to_display(image_tensor.cpu()),
+                    overlay_text(ranked, true_class),
+                )
+            )
 
-if args.out is not None:
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(args.out, dpi=160)
-    print(f"Wrote {args.out}")
-
-if not args.no_show:
-    plt.show()
+if report_mistakes:
+    unlabeled = sum(
+        1 for path in sample_paths if true_class_from_path(path) is None
+    )
+    if unlabeled:
+        print(
+            f"{unlabeled} images had no metal/plastic folder in the path "
+            "and were skipped for the mistake list."
+        )
+    mistakes.sort(key=lambda item: item["confidence"], reverse=True)
+    txt_path = args.mistakes_out.with_suffix(".txt")
+    args.mistakes_out.parent.mkdir(parents=True, exist_ok=True)
+    with txt_path.open("w", encoding="utf-8") as report:
+        for mistake in mistakes:
+            line = (
+                f"{mistake['path']} | true: {mistake['true']} | "
+                f"pred: {mistake['predicted']} "
+                f"({mistake['confidence']:.2%})"
+            )
+            print(line)
+            report.write(line + "\n")
+    print(
+        f"{len(mistakes)} mistakes / {len(sample_paths) - unlabeled} labeled"
+    )
+    print(f"Wrote {txt_path}")
+    cells = [
+        paint_overlay(
+            tensor_to_display(mistake["tensor"]),
+            overlay_text(mistake["ranked"], mistake["true"]),
+        )
+        for mistake in mistakes
+    ]
+    save_grid(
+        cells,
+        f"Mistakes on the 224×224 model input\n{source_label}",
+        args.mistakes_out,
+        show=not args.no_show,
+    )
 else:
-    plt.close(figure)
+    save_grid(
+        cells,
+        f"224×224 model input\n{source_label}",
+        args.out,
+        show=not args.no_show,
+    )

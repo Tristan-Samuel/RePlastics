@@ -132,7 +132,7 @@ chmod +x colab_train.sh
 ./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 6
 ```
 
-If `MyDrive/stage1_binary_v2_256.zip` exists, that 256px zip is copied onto the VM and unzipped. Rebuild it from the live Drive folder (not the incomplete Chrome copies) with `python resize_stage1.py`. That script reads `My Drive/stage1_binary_v2`, drops exact train copies of val files, and replaces the zip. The next Colab ingest keeps the previous 265 test photos (`stage1_locked_test_stems.txt`) and puts newly added train photos in train only. Otherwise the helper copies full-size Drive photos file by file. Drive originals are not moved. After ingest, `--keep` leaves `/content/data_real` so later `--unfreeze` / `--lr` runs skip ingest.
+If `MyDrive/stage1_binary_v2_256.zip` exists, that zip is copied onto the VM and unzipped. Files inside are **224×224** (the folder name is leftover). Rebuild it with `python resize_stage1.py`. The network always trains and evaluates at 224×224 even if Drive originals are larger.
 
 Fine-tune on the **same VM** without copying again:
 
@@ -178,10 +178,11 @@ Colab training already prints **test accuracy** on the VM `data_real` split. To 
 python train.py --eval --data-dir data_real
 python predict.py --data-dir data_real
 python predict.py --images path/to/photo.jpg path/to/folder --out predictions.png
+python predict.py --images path/to/folder --mistakes-out misclassified_predictions.png --no-show
 ```
 
-`--eval` prints validation and test accuracy without training. `predict.py` overlays **metal** and **plastic** percentages on the photos. `--images` scores any files or folders; otherwise it samples the test split. The Mac `data_real/` tree is only the photos you copied here; the Drive/Colab set is larger.
+`--eval` prints validation and test accuracy without training. `predict.py` scales each photo to **224×224** (the tensor the network scores) and overlays **metal** and **plastic** percentages on that view. `--images` scores any files or folders; otherwise it samples the test split. `--mistakes-out` scores every labeled image and writes only the errors to a new PNG/txt; it will not overwrite `misclassified_validation.png`.
 
 The checkpoint is loaded from `models/resnext50_metal_plastic.pt`, or from `resnext50_metal_plastic.pt` in the current directory if that is the file you already have.
 
-In production, send the camera frame through the same ImageNet 224×224 preprocess `predict.py` uses. Do not add a separate downscale-to-256 step first: the model never sees the original pixels at full size anyway, and a second resize changes the crop. Keep the original photo for storage if you want; only the tensor fed to the network should match training.
+In production, scale the camera frame to 224×224 the same way (`bilinear` resize to a square, then ImageNet normalize). `predict.py` and `train.py` eval use that pipeline. Keep the original photo for storage if you want.

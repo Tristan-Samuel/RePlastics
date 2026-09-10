@@ -211,6 +211,7 @@ code_files = (
     "trashnet.py",
     "split_data.py",
     "prepare_drive_data.py",
+    "preprocess.py",
     "stage1_locked_test_stems.txt",
 )
 
