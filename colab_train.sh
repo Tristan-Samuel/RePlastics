@@ -206,14 +206,17 @@ bundle, data_dir, resume, model_path = sys.argv[1:5]
 data_dir = Path(data_dir) if data_dir else None
 model_path = Path(model_path)
 skip = {"__pycache__", ".DS_Store"}
-code_files = (
+code_files = [
     "train.py",
     "trashnet.py",
     "split_data.py",
     "prepare_drive_data.py",
     "preprocess.py",
     "stage1_locked_test_stems.txt",
-)
+]
+for extra in ("stage1_locked_val_stems.txt",):
+    if Path(extra).is_file():
+        code_files.append(extra)
 
 def log(message):
     print(message, flush=True)

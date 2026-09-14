@@ -24,3 +24,7 @@ models/
 
 # Archives
 *.zip
+
+# Label-review outputs
+relabel_proposals.tsv
+relabel_proposals.png

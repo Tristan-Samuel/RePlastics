@@ -134,6 +134,48 @@ chmod +x colab_train.sh
 
 If `MyDrive/stage1_binary_v2_256.zip` exists, that zip is copied onto the VM and unzipped. Files inside are **224×224** (the folder name is leftover). Rebuild it with `python resize_stage1.py`. The network always trains and evaluates at 224×224 even if Drive originals are larger.
 
+The production checkpoint to keep is `models/resnext50_metal_plastic_full_fc_9907.pt` (val 99.07%, test 98.87%, head-only fine-tune on the full Drive set). `models/resnext50_metal_plastic.pt` is the same file until a later run beats it. Do not unfreeze `layer4` on this set.
+
+### Fix Drive labels, then rebuild the zip
+
+Drive originals live in `stage1_binary_v2/train|val / NonPlastic|Plastic`. NonPlastic is metal. Filename prefixes are already consistent (`Others_*` vs `PET_`/`HDPE_`/`PP_`), so the remaining mistakes are `Others` photos in the wrong folder. The model cannot auto-relabel those: it also calls foil trays plastic at 100%. Review the image, then move it.
+
+```bash
+# Dry-run the two confirmed lotion bottles in val/NonPlastic
+python relabel_stage1.py apply --known
+
+# Move them on Drive (same split, other class folder)
+python relabel_stage1.py apply --known --write
+
+# Optional: model review queue for other high-confidence disagreements
+python relabel_stage1.py suggest
+# Edit relabel_proposals.tsv — delete foil trays and other true metal
+python relabel_stage1.py apply --file relabel_proposals.tsv --write
+```
+
+`suggest` only writes a TSV/PNG. `--write` is what actually moves Drive files. Train stays train and val stays val.
+
+Val is oversized (1189 vs 4365 train and 265 locked test), and metal is scarce. After labels are clean, move half of each val class into train (seed 42, remaining val stems are locked):
+
+```bash
+python relabel_stage1.py promote-val
+python relabel_stage1.py promote-val --write
+```
+
+Do not touch the locked test set. Then rebuild the 224 zip and wait until File Stream finishes uploading it (Drive size should match `~/Downloads/stage1_binary_v2_256.zip`):
+
+```bash
+python resize_stage1.py
+```
+
+On a **new** T4, resume from the pinned weights with a short head-only run (not `layer4`):
+
+```bash
+./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 4
+```
+
+If prepare prints `Zip not found` and starts copying thousands of files, the zip is not visible on the VM yet. Wait for Drive, or copy `stage1_binary_v2_256.zip` to My Drive again. Use `--keep` so the next run does not recopy.
+
 Fine-tune on the **same VM** without copying again:
 
 ```bash
@@ -168,7 +210,7 @@ After `fc` training, unfreeze the last residual stage on the **same** `--keep` V
 ./colab_train.sh --keep --drive --resume --unfreeze layer4 --lr 0.001 --lr-backbone 0.0001 --epochs 6
 ```
 
-Do not start `layer4` until `fc` has finished and `Training finished` printed. Skip `layer3` unless `layer4` stalls.
+Do not start `layer4` until `fc` has finished and `Training finished` printed. Skip `layer3` unless `layer4` stalls. On the current full Drive set, skip `layer4` entirely; the head-only 99.07% checkpoint already overfits.
 
 ## Predict
 

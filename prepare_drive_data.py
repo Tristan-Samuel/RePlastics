@@ -319,6 +319,32 @@ def find_dataset_root(root):
     )
 
 
+def resolve_zip(zip_path):
+    if zip_path is None:
+        return None
+    zip_path = Path(zip_path)
+    candidates = [zip_path]
+    name = zip_path.name
+    candidates.extend(
+        [
+            Path("/content/drive/MyDrive") / name,
+            Path("/content/drive/My Drive") / name,
+            Path("/content") / name,
+        ]
+    )
+    seen = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        exists = candidate.is_file()
+        print(f"Zip candidate {candidate} exists={exists}", flush=True)
+        if exists:
+            return candidate
+    return None
+
+
 def unpack_zip(zip_path):
     zip_path = Path(zip_path)
     local_zip = Path("/content") / zip_path.name
@@ -345,9 +371,14 @@ def unpack_zip(zip_path):
 def main():
     args = parse_args()
     dest = args.dest
-    zip_path = args.zip if args.zip is not None else None
-    use_zip = zip_path is not None and zip_path.is_file()
+    zip_path = resolve_zip(args.zip)
+    use_zip = zip_path is not None
     prepared_kind = "zip256-complete" if use_zip else None
+    if args.zip is not None and not use_zip:
+        print(
+            f"Zip not found ({args.zip}). Falling back to per-file Drive copy.",
+            flush=True,
+        )
 
     print(f"Split dest: {dest}", flush=True)
 
