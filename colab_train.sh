@@ -457,11 +457,17 @@ colab_session_is_up() {
 }
 
 revive_colab_kernel() {
-    echo "Colab kernel looks wedged (Timeout waiting for output)."
-    echo "Restarting the kernel. The VM disk stays, including /content/data_real."
+    echo "Colab kernel looks wedged. Restarting it."
+    echo "The VM disk stays, including /content/data_real and the checkpoint."
     colab restart-kernel -s "$SESSION" || true
     echo "Waiting for a fresh kernel..."
     sleep 8
+}
+
+kernel_looks_dead() {
+    grep -Eq \
+        'Timeout waiting for output|Connection was lost|Transport endpoint is not connected|Kernel is dead|Websocket connection' \
+        "$LAST_EXEC_LOG"
 }
 
 colab_exec() {
@@ -475,16 +481,16 @@ colab_exec() {
         if grep -q 'COLAB_STEP_OK' "$LAST_EXEC_LOG"; then
             return 0
         fi
-        if grep -q 'Timeout waiting for output' "$LAST_EXEC_LOG" && [[ "$attempt" -lt 3 ]]; then
+        if kernel_looks_dead && [[ "$attempt" -lt 3 ]]; then
             revive_colab_kernel
             attempt=$((attempt + 1))
             continue
         fi
         echo "Colab step failed. The VM Python never printed COLAB_STEP_OK." >&2
-        if grep -q 'Timeout waiting for output' "$LAST_EXEC_LOG"; then
+        if kernel_looks_dead; then
             echo "Kernel still dead after restart. Stop the session and start a new T4:" >&2
             echo "  colab stop -s $SESSION" >&2
-            echo "  ./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 6" >&2
+            echo "  ./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 4" >&2
         fi
         return 1
     done
@@ -602,6 +608,8 @@ fi
 
 echo "Installing Python packages (Colab already has CUDA PyTorch)"
 colab install -s "$SESSION" -r requirements-colab.txt
+echo "Restarting the kernel after pip so train.py is not talking to a dead websocket"
+revive_colab_kernel
 
 echo "Running train.py on $GPU"
 colab_exec "$TIMEOUT" "$RUN_FILE"

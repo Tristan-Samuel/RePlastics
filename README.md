@@ -172,11 +172,11 @@ Fine-tune on the **same VM** without copying again:
 
 `--keep` leaves the T4 up so `/content/data_real` survives. Changing `--unfreeze` or the learning rate still runs a short validation pass first (now with batch logs). That pass is seconds on local disk, not minutes on Drive. If you stop the session, the VM disk is wiped and the next `--drive` run copies photos once more.
 
-If `colab exec` dies with `Timeout waiting for output` (often after Ctrl+C), the kernel is wedged, not the photos. The helper now restarts that kernel and retries. If it still times out:
+If `colab exec` dies with `Timeout waiting for output` or `Connection was lost` (often after pip or Ctrl+C), the kernel is wedged, not the photos. The helper restarts the kernel after `colab install` and retries those disconnects. If it still dies:
 
 ```bash
 colab stop -s trainer
-./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 6
+./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 4
 ```
 
 To upload a local `data_real` tree instead:
