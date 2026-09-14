@@ -136,26 +136,13 @@ If `MyDrive/stage1_binary_v2_256.zip` exists, that zip is copied onto the VM and
 
 The production checkpoint to keep is `models/resnext50_metal_plastic_full_fc_9907.pt` (val 99.07%, test 98.87%, head-only fine-tune on the full Drive set). `models/resnext50_metal_plastic.pt` is the same file until a later run beats it. Do not unfreeze `layer4` on this set.
 
-### Fix Drive labels, then rebuild the zip
+### Labels, then optionally shrink val
 
-Drive originals live in `stage1_binary_v2/train|val / NonPlastic|Plastic`. NonPlastic is metal. Filename prefixes are already consistent (`Others_*` vs `PET_`/`HDPE_`/`PP_`), so the remaining mistakes are `Others` photos in the wrong folder. The model cannot auto-relabel those: it also calls foil trays plastic at 100%. Review the image, then move it.
+Drive originals live in `stage1_binary_v2/train|val / NonPlastic|Plastic`. **Plastic** is PET / HDPE / PP. **NonPlastic** is the reject/other bucket (`Others_*`: foil trays, odd bottles, etc.). Training still maps that folder to the class name `metal`, but the folder does not mean “this object is made of metal.”
 
-```bash
-# Dry-run the two confirmed lotion bottles in val/NonPlastic
-python relabel_stage1.py apply --known
+`python relabel_stage1.py suggest` lists photos the model disagrees with. On this set that is almost all foil trays the network calls plastic at 100% — those labels are correct. Do not `--write` a proposal list unless you actually found a folder mistake.
 
-# Move them on Drive (same split, other class folder)
-python relabel_stage1.py apply --known --write
-
-# Optional: model review queue for other high-confidence disagreements
-python relabel_stage1.py suggest
-# Edit relabel_proposals.tsv — delete foil trays and other true metal
-python relabel_stage1.py apply --file relabel_proposals.tsv --write
-```
-
-`suggest` only writes a TSV/PNG. `--write` is what actually moves Drive files. Train stays train and val stays val.
-
-Val is oversized (1189 vs 4365 train and 265 locked test), and metal is scarce. After labels are clean, move half of each val class into train (seed 42, remaining val stems are locked):
+Val is oversized (1189 vs 4365 train and 265 locked test). If you want more train photos, move half of each val class into train (seed 42, remaining val stems are locked):
 
 ```bash
 python relabel_stage1.py promote-val

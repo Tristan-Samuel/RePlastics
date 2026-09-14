@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-"""Review and fix Drive stage1 labels; optionally move some val into train.
+"""Review Drive stage1 labels; optionally move some val into train.
 
-Drive layout (do not change split names):
+Drive layout:
 
     stage1_binary_v2/train|val / NonPlastic|Plastic
 
-NonPlastic is metal. Moves stay in the same split (train stays train).
-Nothing is written unless you pass --write.
+NonPlastic is the reject/other bucket (foil trays, odd bottles, etc.),
+not "made of metal". Plastic is PET / HDPE / PP. The training code still
+maps NonPlastic -> metal. Moves stay in the same split.
 
-Typical order:
-  1. python relabel_stage1.py apply --known          # dry-run the two lotion bottles
-  2. python relabel_stage1.py suggest                # model review queue (optional)
-  3. Edit relabel_proposals.tsv, delete foil trays
-  4. python relabel_stage1.py apply --file relabel_proposals.tsv --write
-  5. python relabel_stage1.py promote-val            # dry-run half of val -> train
-  6. python relabel_stage1.py promote-val --write
-  7. python resize_stage1.py                         # rebuild 224 zip onto Drive
+`suggest` lists photos the model disagrees with. That is usually a model
+error (foil trays), not a label error. Nothing is written unless --write.
+
+Typical order if you actually find a bad label:
+  1. python relabel_stage1.py suggest
+  2. Keep only true folder mistakes in relabel_proposals.tsv
+  3. python relabel_stage1.py apply --file relabel_proposals.tsv --write
+  4. python relabel_stage1.py promote-val
+  5. python relabel_stage1.py promote-val --write
+  6. python resize_stage1.py
 """
 
 from __future__ import annotations
@@ -41,24 +44,6 @@ SPLITS = ("train", "val")
 OTHER_CLASS = {"NonPlastic": "Plastic", "Plastic": "NonPlastic"}
 FOLDER_TO_LABEL = {"NonPlastic": "metal", "Plastic": "plastic"}
 LABEL_TO_FOLDER = {"metal": "NonPlastic", "plastic": "Plastic"}
-
-# Visually confirmed: plastic bottles sitting in NonPlastic/val.
-KNOWN_FLIPS = (
-    (
-        "val",
-        "NonPlastic",
-        "Others_capture_00060_20251126_160916_498646.jpg",
-        "Plastic",
-        "Aveeno lotion bottle",
-    ),
-    (
-        "val",
-        "NonPlastic",
-        "Others_capture_00300_20251204_124035_096915.png",
-        "Plastic",
-        "white lotion bottle",
-    ),
-)
 
 
 def parse_args():
@@ -124,13 +109,8 @@ def parse_args():
     apply_cmd.add_argument(
         "--file",
         type=Path,
-        default=None,
+        required=True,
         help="TSV from suggest, or any TSV with split/src_class/filename/new_class.",
-    )
-    apply_cmd.add_argument(
-        "--known",
-        action="store_true",
-        help="Include the two confirmed lotion bottles in NonPlastic/val.",
     )
     apply_cmd.add_argument(
         "--write",
@@ -217,40 +197,37 @@ def parse_proposal_row(row):
 
 def collect_apply_rows(args):
     rows = []
-    if args.known:
-        rows.extend(KNOWN_FLIPS)
-    if args.file is not None:
-        if not args.file.is_file():
-            raise SystemExit(f"Missing TSV: {args.file}")
-        with args.file.open(encoding="utf-8", newline="") as handle:
-            sample = handle.read(2048)
-            handle.seek(0)
-            dialect = csv.Sniffer().sniff(sample, delimiters="\t,")
-            has_header = csv.Sniffer().has_header(sample)
-            if has_header:
-                reader = csv.DictReader(handle, dialect=dialect)
-                for raw in reader:
-                    parsed = parse_proposal_row(raw)
-                    if parsed is not None:
-                        rows.append(parsed)
-            else:
-                reader = csv.reader(handle, dialect=dialect)
-                for raw in reader:
-                    if not raw or raw[0].startswith("#"):
-                        continue
-                    parsed = parse_proposal_row(
-                        {
-                            "split": raw[0],
-                            "src_class": raw[1],
-                            "filename": raw[2],
-                            "new_class": raw[3],
-                            "reason": raw[4] if len(raw) > 4 else "",
-                        }
-                    )
-                    if parsed is not None:
-                        rows.append(parsed)
+    if not args.file.is_file():
+        raise SystemExit(f"Missing TSV: {args.file}")
+    with args.file.open(encoding="utf-8", newline="") as handle:
+        sample = handle.read(2048)
+        handle.seek(0)
+        dialect = csv.Sniffer().sniff(sample, delimiters="\t,")
+        has_header = csv.Sniffer().has_header(sample)
+        if has_header:
+            reader = csv.DictReader(handle, dialect=dialect)
+            for raw in reader:
+                parsed = parse_proposal_row(raw)
+                if parsed is not None:
+                    rows.append(parsed)
+        else:
+            reader = csv.reader(handle, dialect=dialect)
+            for raw in reader:
+                if not raw or raw[0].startswith("#"):
+                    continue
+                parsed = parse_proposal_row(
+                    {
+                        "split": raw[0],
+                        "src_class": raw[1],
+                        "filename": raw[2],
+                        "new_class": raw[3],
+                        "reason": raw[4] if len(raw) > 4 else "",
+                    }
+                )
+                if parsed is not None:
+                    rows.append(parsed)
     if not rows:
-        raise SystemExit("Pass --known and/or --file TSV.")
+        raise SystemExit(f"No moves in {args.file}.")
     return rows
 
 
@@ -535,7 +512,7 @@ def suggest(args):
     for axis in axes[len(grid) :]:
         axis.set_axis_off()
     figure.suptitle(
-        "Proposed label flips (review; foil trays are usually correct metal)",
+        "Proposed label flips (usually model errors; foil/other stay NonPlastic)",
         fontsize=11,
     )
     args.png.parent.mkdir(parents=True, exist_ok=True)
