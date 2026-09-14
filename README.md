@@ -132,7 +132,7 @@ chmod +x colab_train.sh
 ./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 6
 ```
 
-If `MyDrive/stage1_binary_v2_256.zip` exists, that zip is copied onto the VM and unzipped. Files inside are **224×224** (the folder name is leftover). Rebuild it with `python resize_stage1.py`. The network always trains and evaluates at 224×224 even if Drive originals are larger.
+If `MyDrive/stage1_binary_v2_256.zip` exists, that zip is copied onto the VM and unzipped. Files inside are **224×224** (the folder name is leftover). Rebuild it with `python resize_stage1.py`. The network always trains and evaluates at 224×224 even if Drive originals are larger. `--resume` copies the checkpoint from Drive **before** unzip so Colab Drive FUSE does not die mid-copy. A new zip (size or mtime) rebuilds `/content/data_real` instead of skipping ingest.
 
 The production checkpoint to keep is `models/resnext50_metal_plastic_full_fc_9907.pt` (val 99.07%, test 98.87%, head-only fine-tune on the full Drive set). `models/resnext50_metal_plastic.pt` is the same file until a later run beats it. Do not unfreeze `layer4` on this set.
 

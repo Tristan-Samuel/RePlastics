@@ -212,6 +212,7 @@ code_files = [
     "split_data.py",
     "prepare_drive_data.py",
     "preprocess.py",
+    "colab_copy_checkpoint.py",
     "stage1_locked_test_stems.txt",
 ]
 for extra in ("stage1_locked_val_stems.txt",):
@@ -335,37 +336,8 @@ prepare_file.write_text(
 print(f"Wrote {prepare_file} for {source} (zip {zip_path})")
 PY
 
-python3 - "$CHECKPOINT_FILE" <<'PY'
-from pathlib import Path
-import sys
-
-Path(sys.argv[1]).write_text(
-    "import shutil\n"
-    "from pathlib import Path\n"
-    "dest = Path('/content/models/resnext50_metal_plastic.pt')\n"
-    "if dest.exists():\n"
-    "    print('Using checkpoint already on the VM', dest, flush=True)\n"
-    "else:\n"
-    "    dest.parent.mkdir(parents=True, exist_ok=True)\n"
-    "    candidates = [\n"
-    "        Path('/content/drive/MyDrive/metal-plastic-sorting/resnext50_metal_plastic.pt'),\n"
-    "        Path('/content/drive/MyDrive/stage1_binary_v2/resnext50_metal_plastic.pt'),\n"
-    "    ]\n"
-    "    for src in candidates:\n"
-    "        if src.is_file():\n"
-    "            shutil.copy2(src, dest)\n"
-    "            print('Copied checkpoint from', src, flush=True)\n"
-    "            break\n"
-    "    else:\n"
-    "        raise SystemExit(\n"
-    "            'Missing checkpoint. Copy models/resnext50_metal_plastic.pt '\n"
-    "            'to MyDrive/metal-plastic-sorting/ and re-run.'\n"
-    "        )\n"
-    "print('COLAB_STEP_OK', flush=True)\n",
-    encoding="utf-8",
-)
-print("Wrote", sys.argv[1])
-PY
+cp "$ROOT/colab_copy_checkpoint.py" "$CHECKPOINT_FILE"
+echo "Wrote $CHECKPOINT_FILE"
 
 cat > "$EXTRACT_FILE" <<'PY'
 import zipfile
@@ -603,12 +575,12 @@ if [[ "$USE_DRIVE" -eq 1 ]]; then
     ensure_scripts_on_vm
     PHASE=uploaded
     mount_google_drive
+    if [[ "$RESUME" -eq 1 ]]; then
+        echo "Copying checkpoint from Drive onto the VM (before unzip, while FUSE is up)"
+        colab_exec 180 "$CHECKPOINT_FILE"
+    fi
     echo "Preparing photos on the VM (256px zip if present, else Drive copy)"
     colab_exec 3600 "$PREPARE_FILE"
-    if [[ "$RESUME" -eq 1 ]]; then
-        echo "Copying checkpoint from Drive onto the VM"
-        colab_exec 120 "$CHECKPOINT_FILE"
-    fi
 elif vm_has 'train.py'; then
     echo "Training scripts already on the VM; skipping upload."
     PHASE=uploaded

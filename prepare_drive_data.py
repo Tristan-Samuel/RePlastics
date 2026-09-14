@@ -319,6 +319,12 @@ def find_dataset_root(root):
     )
 
 
+def zip_fingerprint(zip_path):
+    zip_path = Path(zip_path)
+    stat = zip_path.stat()
+    return f"zip256:{stat.st_size}:{int(stat.st_mtime)}"
+
+
 def resolve_zip(zip_path):
     if zip_path is None:
         return None
@@ -373,7 +379,7 @@ def main():
     dest = args.dest
     zip_path = resolve_zip(args.zip)
     use_zip = zip_path is not None
-    prepared_kind = "zip256-complete" if use_zip else None
+    prepared_kind = zip_fingerprint(zip_path) if use_zip else None
     if args.zip is not None and not use_zip:
         print(
             f"Zip not found ({args.zip}). Falling back to per-file Drive copy.",
@@ -381,6 +387,16 @@ def main():
         )
 
     print(f"Split dest: {dest}", flush=True)
+    if prepared_kind:
+        print(f"Zip fingerprint: {prepared_kind}", flush=True)
+        marker = dest / ".prepared_from"
+        if marker.is_file():
+            previous = marker.read_text(encoding="utf-8").strip()
+            if previous != prepared_kind:
+                print(
+                    f"Local copy is from {previous}; rebuilding from the new zip.",
+                    flush=True,
+                )
 
     if not args.force and local_copy_ready(dest, expected_kind=prepared_kind):
         copied = count_split_files(dest)
