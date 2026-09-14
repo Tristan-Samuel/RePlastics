@@ -374,6 +374,42 @@ criterion = nn.CrossEntropyLoss()
 optimizer = build_optimizer(model, args)
 
 
+def score_loader(data_loader, log_label):
+    model.eval()
+    running_loss = 0.0
+    correct_predictions = 0
+    total_predictions = 0
+
+    with torch.no_grad():
+        for batch_index, (images, labels) in enumerate(
+            data_loader,
+            start=1,
+        ):
+            images = images.to(device)
+            labels = labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            batch_loss = loss.item()
+            running_loss += batch_loss * images.size(0)
+            predicted_classes = outputs.argmax(dim=1)
+            correct_predictions += (
+                predicted_classes == labels
+            ).sum().item()
+            total_predictions += labels.size(0)
+            print(
+                f"  {log_label} batch "
+                f"{batch_index}/{len(data_loader)} "
+                f"loss {batch_loss:.4f} "
+                f"running {running_loss / total_predictions:.4f}",
+                flush=True,
+            )
+
+    return (
+        running_loss / total_predictions,
+        correct_predictions / total_predictions,
+    )
+
+
 # ---------------------------------------------------------
 # Training
 # ---------------------------------------------------------
@@ -565,54 +601,13 @@ if args.resume:
         "Scoring the current checkpoint on validation before training...",
         flush=True,
     )
-    model.eval()
-
-    running_loss = 0.0
-    correct_predictions = 0
-    total_predictions = 0
-
-    with torch.no_grad():
-
-        for batch_index, (images, labels) in enumerate(
-            validation_loader,
-            start=1,
-        ):
-
-            images = images.to(device)
-            labels = labels.to(device)
-
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-
-            running_loss += (
-                loss.item() * images.size(0)
-            )
-
-            predicted_classes = outputs.argmax(dim=1)
-
-            correct_predictions += (
-                predicted_classes == labels
-            ).sum().item()
-
-            total_predictions += labels.size(0)
-
-            if batch_index % 20 == 0 or batch_index == len(
-                validation_loader
-            ):
-                print(
-                    f"  Starting val batch "
-                    f"{batch_index}/{len(validation_loader)}",
-                    flush=True,
-                )
-
-    best_validation_accuracy = (
-        correct_predictions
-        / total_predictions
+    validation_loss, best_validation_accuracy = score_loader(
+        validation_loader,
+        "Starting val",
     )
-
     print(
         f"Starting validation loss: "
-        f"{running_loss / total_predictions:.4f} | "
+        f"{validation_loss:.4f} | "
         f"Starting validation accuracy: "
         f"{best_validation_accuracy:.2%}",
         flush=True,
@@ -688,48 +683,9 @@ for epoch in range(args.epochs):
     )
 
 
-    # =====================================================
-    # VALIDATION
-    # =====================================================
-
-    model.eval()
-
-    running_loss = 0.0
-    correct_predictions = 0
-    total_predictions = 0
-
-
-    # We don't need gradients when evaluating.
-    with torch.no_grad():
-
-        for images, labels in validation_loader:
-
-            images = images.to(device)
-            labels = labels.to(device)
-
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-
-            running_loss += (
-                loss.item() * images.size(0)
-            )
-
-            predicted_classes = outputs.argmax(dim=1)
-
-            correct_predictions += (
-                predicted_classes == labels
-            ).sum().item()
-
-            total_predictions += labels.size(0)
-
-
-    validation_loss = (
-        running_loss / total_predictions
-    )
-
-    validation_accuracy = (
-        correct_predictions
-        / total_predictions
+    validation_loss, validation_accuracy = score_loader(
+        validation_loader,
+        "Val",
     )
 
 
