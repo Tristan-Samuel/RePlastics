@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Problem{% endblock %}
+{% block body %}
+  <h1>That did not start</h1>
+  <p>{{ message }}</p>
+  <p><a href="{{ url_for('jobs_page') }}">Back to jobs</a></p>
+{% endblock %}

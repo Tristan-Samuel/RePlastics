@@ -9,6 +9,8 @@ __pycache__/
 # Dataset (images are not committed)
 data/
 data_real/
+data_sep16/
+data_belt_stage1/
 
 # Colab helper temp files
 .colab_*
@@ -28,3 +30,9 @@ models/
 # Label-review outputs
 relabel_proposals.tsv
 relabel_proposals.png
+
+# Local model-inspection plots
+analysis/
+
+# Lab app job logs
+web/job-logs/

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Jobs{% endblock %}
+{% block body %}
+  <div class="page-head">
+    <h1>Jobs</h1>
+    <p>One job at a time. The line under the form is the command that will run.</p>
+  </div>
+
+  <div class="preset-row">
+    {% for preset in presets %}
+      <button type="button" class="preset" data-preset="{{ preset | tojson }}">{{ preset.label }}</button>
+    {% endfor %}
+  </div>
+
+  <form id="train-form" method="post" action="{{ url_for('start_job') }}" class="card form-grid">
+    <input type="hidden" name="kind" value="train">
+    <fieldset class="span-2">
+      <legend>Where</legend>
+      <label class="check"><input type="radio" name="where" value="colab" {% if defaults.where == 'colab' %}checked{% endif %}> T4 (Colab)</label>
+      <label class="check"><input type="radio" name="where" value="local" {% if defaults.where == 'local' %}checked{% endif %}> This Mac</label>
+    </fieldset>
+    <label class="check"><input type="checkbox" name="resume" {% if defaults.resume %}checked{% endif %}> Resume checkpoint</label>
+    <label class="check"><input type="checkbox" name="keep" {% if defaults.keep %}checked{% endif %}> Keep the T4 up</label>
+    <label class="check"><input type="checkbox" name="drive" {% if defaults.drive %}checked{% endif %}> Use Drive zip</label>
+    <label>
+      GPU
+      <select name="gpu">
+        {% for gpu in gpus %}
+          <option {% if gpu == defaults.gpu %}selected{% endif %}>{{ gpu }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Unfreeze
+      <select name="unfreeze">
+        {% for name in unfreeze %}
+          <option {% if name == defaults.unfreeze %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Epochs <input name="epochs" value="{{ defaults.epochs }}" inputmode="numeric"></label>
+    <label>Learning rate <input name="lr" value="{{ defaults.lr }}" inputmode="decimal"></label>
+    <label>Backbone learning rate <input name="lr_backbone" value="{{ defaults.lr_backbone }}" inputmode="decimal" placeholder="blank uses lr / 10"></label>
+    <label>Weight power <input name="weight_power" value="{{ defaults.weight_power }}" inputmode="decimal"></label>
+    <label class="span-2">Checkpoint <input name="model" value="{{ defaults.model }}"></label>
+    <label class="span-2">
+      Dataset for this Mac, or for a T4 run that does not use Drive
+      <select name="data_dir">
+        {% for name in data_roots %}
+          <option {% if name == defaults.data_dir %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="span-2 command-preview">
+      <p class="label">Command</p>
+      <pre id="preview">…</pre>
+    </div>
+    <div class="span-2 buttons">
+      <button id="start-train">Start</button>
+    </div>
+  </form>
+
+  <form
+    method="post"
+    action="{{ url_for('start_job') }}"
+    data-confirm="Stop the Colab session named trainer?"
+    class="inline-form"
+  >
+    <input type="hidden" name="kind" value="stop-t4">
+    <button>Stop T4</button>
+  </form>
+  <p class="hint">Stop T4 ends the Colab session named trainer. Stop job, in the log, only ends the process on this Mac.</p>
+{% endblock %}

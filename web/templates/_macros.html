@@ -1,0 +1,18 @@
+{% macro pct(value) %}
+  {%- if value is none -%}
+    —
+  {%- elif value > 1 -%}
+    {{ '%.2f'|format(value) }}%
+  {%- else -%}
+    {{ '%.2f'|format(value * 100) }}%
+  {%- endif -%}
+{% endmacro %}
+
+{% macro figure(card) %}
+  <figure class="shot" {% if card.true is defined %}data-true="{{ card.true }}" data-resin="{{ card.resin or 'unknown' }}"{% endif %}>
+    <a href="{{ url_for('files', rel=card.rel) }}">
+      <img src="{{ url_for('files', rel=card.rel) }}" alt="{{ card.label }}">
+    </a>
+    <figcaption>{{ card.caption if card.caption is defined else card.label }}</figcaption>
+  </figure>
+{% endmacro %}

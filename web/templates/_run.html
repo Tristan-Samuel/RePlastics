@@ -1,0 +1,172 @@
+{% from "_macros.html" import figure %}
+{% if not run %}
+  <p>No saved analysis for this checkpoint yet.</p>
+{% else %}
+  <div class="filters" data-filters>
+    <label>
+      Class
+      <select data-filter-class>
+        <option value="any">Any</option>
+        <option value="metal">Metal</option>
+        <option value="plastic">Plastic</option>
+      </select>
+    </label>
+    <label>
+      Resin
+      <select data-filter-resin>
+        <option value="any">Any</option>
+        <option value="PET">PET</option>
+        <option value="HDPE">HDPE</option>
+        <option value="PP">PP</option>
+        <option value="OTHERS">OTHERS</option>
+        <option value="unknown">No resin tag</option>
+      </select>
+    </label>
+  </div>
+
+  <section id="scores">
+    <h2>Scores</h2>
+    {% if run.scoring_html %}
+      <div class="prose">{{ run.scoring_html }}</div>
+    {% elif not eval_log %}
+      <p>This run has no scoring section.</p>
+    {% endif %}
+    {% if eval_log %}
+      <h3>{{ eval_log.name }}</h3>
+      <pre class="report">{{ eval_log.text }}</pre>
+    {% endif %}
+  </section>
+
+  <section id="errors">
+    <h2>Errors</h2>
+    <p>Argmax errors. <code>analyze.py</code> still counts a low-score miss as a mistake. <code>predict.py</code> moves frames under the hold into Held.</p>
+    {% if run.montages %}
+      <div class="grid">
+        {% for card in run.montages %}{{ figure(card) }}{% endfor %}
+      </div>
+    {% endif %}
+    {% if run.errors or run.mistakes %}
+      <div class="grid">
+        {% for card in run.errors %}{{ figure(card) }}{% endfor %}
+        {% for row in run.mistakes %}
+          <article class="shot" data-true="{{ row.true }}" data-resin="{{ row.resin }}">
+            {% if row.image_rel %}
+              <a href="{{ url_for('files', rel=row.image_rel) }}">
+                <img src="{{ url_for('files', rel=row.image_rel) }}" alt="{{ row.path }}">
+              </a>
+            {% endif %}
+            <p>true {{ row.true }} → {{ row.predicted }} {{ row.score }}{% if row.resin != 'unknown' %} · {{ row.resin }}{% endif %}</p>
+            <p class="path">{{ row.path }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    {% elif not run.montages %}
+      <p>No error images in this run.</p>
+    {% endif %}
+  </section>
+
+  <section id="held">
+    <h2>Held</h2>
+    <p>Frames <code>predict.py</code> labeled uncertain. They are left out of the mistake image.</p>
+    {% if run.held %}
+      <div class="grid">
+        {% for row in run.held %}
+          <article class="shot" data-true="{{ row.true }}" data-resin="{{ row.resin }}">
+            {% if row.image_rel %}
+              <a href="{{ url_for('files', rel=row.image_rel) }}">
+                <img src="{{ url_for('files', rel=row.image_rel) }}" alt="{{ row.path }}">
+              </a>
+            {% endif %}
+            <p>true {{ row.true }} · argmax {{ row.predicted }} {{ row.score }}{% if row.resin != 'unknown' %} · {{ row.resin }}{% endif %} · uncertain</p>
+            <p class="path">{{ row.path }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>No held frames in this run.</p>
+    {% endif %}
+  </section>
+
+  <section id="cam">
+    <h2>Correct Grad-CAM</h2>
+    {% if run.correct %}
+      <div class="grid">
+        {% for card in run.correct %}{{ figure(card) }}{% endfor %}
+      </div>
+    {% else %}
+      <p>No correct Grad-CAM images in this run.</p>
+    {% endif %}
+  </section>
+
+  <section id="maps">
+    <h2>Feature maps</h2>
+    {% if run.maps %}
+      {% for group in run.maps %}
+        <article class="map-group" data-true="{{ group.true }}" data-resin="{{ group.resin }}">
+          <h3>{{ group.label }}</h3>
+          <div class="grid">
+            {% for card in group.layers %}{{ figure(card) }}{% endfor %}
+          </div>
+        </article>
+      {% endfor %}
+    {% else %}
+      <p>No feature maps in this run.</p>
+    {% endif %}
+  </section>
+
+  <section id="filters">
+    <h2>Filters</h2>
+    {% if run.filters %}
+      <div class="grid wide">
+        {% for card in run.filters %}{{ figure(card) }}{% endfor %}
+      </div>
+    {% else %}
+      <p>No filter plots in this run.</p>
+    {% endif %}
+  </section>
+
+  <section id="space">
+    <h2>Feature space</h2>
+    {% if run.space %}
+      <div class="grid wide">
+        {% for card in run.space %}{{ figure(card) }}{% endfor %}
+      </div>
+    {% else %}
+      <p>No PCA or t-SNE plot in this run.</p>
+    {% endif %}
+  </section>
+
+  <section id="stats">
+    <h2>Layer stats</h2>
+    {% if run.stats %}
+      <div class="grid wide">
+        {% for card in run.stats %}{{ figure(card) }}{% endfor %}
+      </div>
+    {% else %}
+      <p>No layer stats in this run.</p>
+    {% endif %}
+  </section>
+
+  <section id="report">
+    <h2>Report</h2>
+    {% if run.reports %}
+      {% for report in run.reports %}
+        <h3>{{ report.name }}</h3>
+        <div class="prose">{{ report.html }}</div>
+      {% endfor %}
+    {% else %}
+      <p>No markdown report in this run.</p>
+    {% endif %}
+    {% if run.other %}
+      <h3>Other files</h3>
+      {% for item in run.other %}
+        {% if item.image is defined and not item.image %}
+          <h4>{{ item.name }}</h4>
+          <pre class="report">{{ item.text }}</pre>
+        {% elif item.rel is defined %}
+          {{ figure(item) }}
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+  </section>
+{% endif %}

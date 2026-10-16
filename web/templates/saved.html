@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ item.label }}{% endblock %}
+{% block watch %}yes{% endblock %}
+{% block body %}
+  <div class="page-head">
+    <p><a href="{{ url_for('models_page') }}">Models</a></p>
+    <h1>{{ item.label }}</h1>
+    <p><code>{{ item.rel }}</code></p>
+    <div class="buttons">
+      <form method="post" action="{{ url_for('reveal') }}">
+        <input type="hidden" name="path" value="{{ item.rel }}">
+        <button>Reveal in Finder</button>
+      </form>
+      <form method="post" action="{{ url_for('zip_folder') }}">
+        <input type="hidden" name="path" value="{{ item.rel }}">
+        <button>Zip this folder</button>
+      </form>
+    </div>
+  </div>
+  {% set eval_log = none %}
+  {% include "_run.html" %}
+{% endblock %}

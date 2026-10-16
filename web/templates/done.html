@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block body %}
+  <h1>{{ title }}</h1>
+  <p><code>{{ detail }}</code></p>
+  <form method="post" action="{{ url_for('reveal') }}">
+    <input type="hidden" name="path" value="{{ reveal_path }}">
+    <button>Reveal in Finder</button>
+  </form>
+{% endblock %}

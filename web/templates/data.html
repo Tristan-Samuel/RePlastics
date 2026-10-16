@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Data{% endblock %}
+{% block body %}
+  <div class="page-head">
+    <h1>Data</h1>
+    <p>Counts are files sitting in the class folders. Split reads unsplitted metal and plastic, copies them into the three splits, then deletes those two source folders.</p>
+  </div>
+
+  {% for row in datasets %}
+    <section class="card">
+      <div class="section-head">
+        <h2>{{ row.name }}</h2>
+        {% if row.present %}
+          <form method="post" action="{{ url_for('reveal') }}">
+            <input type="hidden" name="path" value="{{ row.name }}">
+            <button>Reveal in Finder</button>
+          </form>
+        {% endif %}
+      </div>
+      {% if not row.present %}
+        <p>Not on disk.</p>
+      {% else %}
+        <table>
+          <thead>
+            <tr><th>Split</th><th>Metal</th><th>Plastic</th><th>Total</th></tr>
+          </thead>
+          <tbody>
+            {% for split in row.splits %}
+              <tr>
+                <td>{{ split.name }}</td>
+                <td>{{ split.metal }}</td>
+                <td>{{ split.plastic }}</td>
+                <td>{{ split.total }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if row.loose %}
+          <p>Unsplitted source folders:</p>
+          <ul>
+            {% for item in row.loose %}
+              <li>{{ item.name }}: {{ item.count }}</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p>No unsplitted metal or plastic folder.</p>
+        {% endif %}
+        <form
+          method="post"
+          action="{{ url_for('start_job') }}"
+          data-confirm="Split copies metal and plastic into train, validation, and test, then deletes those two source folders. Continue?"
+        >
+          <input type="hidden" name="kind" value="split">
+          <input type="hidden" name="data_dir" value="{{ row.name }}">
+          <button>Split {{ row.name }}</button>
+        </form>
+      {% endif %}
+    </section>
+  {% endfor %}
+
+  <section class="card">
+    <h2>Belt 224 zip</h2>
+    <p>Builds <code>data_belt_stage1</code> and <code>{{ belt_zip }}</code>.</p>
+    <p>{% if belt_zip_exists %}The zip is already in Downloads.{% else %}The zip is not in Downloads yet.{% endif %}</p>
+    <div class="buttons">
+      <form
+        method="post"
+        action="{{ url_for('start_job') }}"
+        data-confirm="This rebuilds data_belt_stage1 and ~/Downloads/belt_stage1_224.zip. Continue?"
+      >
+        <input type="hidden" name="kind" value="belt-zip">
+        <button>Build 224 zip</button>
+      </form>
+      {% if belt_zip_exists %}
+        <form method="post" action="{{ url_for('reveal') }}">
+          <input type="hidden" name="path" value="{{ belt_zip }}">
+          <button>Reveal zip in Finder</button>
+        </form>
+      {% endif %}
+    </div>
+  </section>
+{% endblock %}
