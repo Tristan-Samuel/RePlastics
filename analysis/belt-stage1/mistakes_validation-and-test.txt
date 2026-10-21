@@ -1,0 +1,13 @@
+# mistakes by resin
+HDPE: 2/212 (0.9%)
+PET: 0/526 (0.0%)
+PP: 1/64 (1.6%)
+OTHERS: 2/79 (2.5%)
+unknown: 1/670 (0.1%)
+
+data_belt_stage1/validation/plastic/capture_00551_20260915_151544_271089_HDPE.jpg | true: plastic | resin: HDPE | pred: metal (99.11%)
+data_belt_stage1/validation/plastic/capture_01024_20260916_130929_398443_HDPE.jpg | true: plastic | resin: HDPE | pred: metal (96.25%)
+data_belt_stage1/validation/plastic/capture_00132_20260914_101313_047113_PP.jpg | true: plastic | resin: PP | pred: metal (91.10%)
+data_belt_stage1/validation/metal/capture_00324_20260917_124502_946802_OTHERS.jpg | true: metal | resin: OTHERS | pred: plastic (84.87%)
+data_belt_stage1/validation/metal/capture_00208_20260917_123800_024132_OTHERS.jpg | true: metal | resin: OTHERS | pred: plastic (76.46%)
+data_belt_stage1/test/metal/capture_01896_20260929_141207_925981.jpg | true: metal | pred: plastic (69.16%)

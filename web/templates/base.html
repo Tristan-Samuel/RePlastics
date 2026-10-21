@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Lab{% endblock %} · RePlastics</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <title>{% block title %}Lab{% endblock %} · Metal / plastic</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=2">
 </head>
 <body
   data-running="{{ 'yes' if job_state.running else 'no' }}"
   data-watch-job="{% block watch %}no{% endblock %}"
 >
   <header class="top">
-    <a class="brand" href="{{ url_for('jobs_page') }}">RePlastics lab</a>
+    <a class="brand" href="{{ url_for('models_page') }}">Metal / plastic</a>
     <nav>
-      <a href="{{ url_for('jobs_page') }}" {% if request.endpoint == 'jobs_page' %}aria-current="page"{% endif %}>Jobs</a>
-      <a href="{{ url_for('data_page') }}" {% if request.endpoint == 'data_page' %}aria-current="page"{% endif %}>Data</a>
       <a href="{{ url_for('models_page') }}" {% if request.endpoint in ('models_page', 'model_page', 'saved_page') %}aria-current="page"{% endif %}>Models</a>
+      <a href="{{ url_for('data_page') }}" {% if request.endpoint == 'data_page' %}aria-current="page"{% endif %}>Data</a>
+      <a href="{{ url_for('jobs_page') }}" {% if request.endpoint == 'jobs_page' %}aria-current="page"{% endif %}>Jobs</a>
     </nav>
     <span id="session" class="pill {% if session_state.up %}up{% endif %}">{{ session_state.label }}</span>
   </header>
@@ -23,6 +23,6 @@
     {% block body %}{% endblock %}
   </main>
   {% include "_log.html" %}
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=2"></script>
 </body>
 </html>

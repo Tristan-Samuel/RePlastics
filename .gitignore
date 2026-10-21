@@ -31,8 +31,19 @@ models/
 relabel_proposals.tsv
 relabel_proposals.png
 
-# Local model-inspection plots
-analysis/
+# Inspection plots stay local, except the published belt stage 1 run.
+analysis/*
+!analysis/belt-stage1/
+!analysis/belt-stage1/**
+
+# Score caches for that run. Model weights stay ignored by *.pt above.
+!analysis/belt-stage1/confidence/test_logits.pt
+!analysis/belt-stage1/confidence/validation_logits.pt
+
+# Earlier Drive-run figures. train.py still writes these locally.
+/confusion_matrix.png
+/misclassified_validation.png
+/misclassified_validation.txt
 
 # Lab app job logs
 web/job-logs/
