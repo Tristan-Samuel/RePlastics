@@ -127,4 +127,4 @@ The test split is balanced on purpose: 150 metal, 150 plastic.
 
 A checkpoint is about 88 MB. Three of them live in `models/` on this machine, and `.gitignore` leaves them out. Loading one in PyTorch shows the weights plus three numbers: validation accuracy, balanced validation accuracy, and test accuracy. The file has no per-epoch history.
 
-`train.py` prints each epoch to the terminal. It does not write a log file, and the Colab transcript was not kept. `web/job-logs/` has a local lab check and the 16 October inspection run. The training record is the report linked above.
+`train.py` prints each epoch to the terminal. It does not write a log file, and the Colab transcript was not kept. The lab writes a job transcript under `web/job-logs/` when a job runs. Those files are gitignored. The training record is the report linked above.
