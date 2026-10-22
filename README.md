@@ -103,6 +103,15 @@ python predict.py --images path/to/photo.jpg --no-show
 
 `predict.py` resizes to 224×224 and draws the metal and plastic percentages. `--eval` prints validation and test accuracy and leaves the checkpoint alone.
 
+## Jetson
+
+```bash
+pip install onnx onnxruntime
+python export_onnx.py --check --data-dir data_belt_stage1
+```
+
+That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_plastic.onnx.json`. The graph is two logits. The camera process still does the 224 resize, ImageNet normalize, and the 0.97 hold. Copy both files to the Jetson and build the engine there: [docs/jetson.md](docs/jetson.md).
+
 ## Lab
 
 ```bash
