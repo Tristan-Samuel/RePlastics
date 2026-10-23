@@ -26,7 +26,10 @@ body {
 
 [hidden] { display: none !important; }
 
-a { color: var(--accent); }
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
 
 a:hover { color: #8ff3e2; }
 
@@ -120,12 +123,29 @@ main {
   border-top: 1px solid var(--line);
 }
 
-.model-list a {
-  color: var(--accent);
+.model-list a,
+a.model-card,
+a.model-card:hover {
+  color: var(--text);
   text-decoration: none;
 }
 
-.model-list a:hover { text-decoration: underline; }
+.model-list a:hover { color: var(--accent); }
+
+a.model-card .meta,
+a.model-card .lbl,
+a.model-card .aliases,
+a.model-card code { color: var(--muted); }
+
+a.model-card h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+a.model-card .num { color: var(--text); }
+
+a.model-card .chip.warn { color: var(--warn); }
 
 .model-head h1,
 .wrap {
