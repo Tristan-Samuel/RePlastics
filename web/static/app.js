@@ -102,6 +102,39 @@ if (copy) {
   });
 }
 
+document.querySelectorAll("[data-copy-from]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const node = document.getElementById(button.dataset.copyFrom);
+    const text = node ? node.textContent.trim() : "";
+    const done = () => {
+      const previous = button.textContent;
+      button.textContent = "Copied";
+      window.setTimeout(() => {
+        button.textContent = previous;
+      }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(() => {
+        const area = document.createElement("textarea");
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+        done();
+      });
+      return;
+    }
+    const area = document.createElement("textarea");
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+    done();
+  });
+});
+
 document.querySelectorAll("form[data-confirm]").forEach((form) => {
   form.addEventListener("submit", (event) => {
     if (!window.confirm(form.dataset.confirm)) {

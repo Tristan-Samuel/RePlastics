@@ -128,7 +128,7 @@ That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_pl
 python -m web
 ```
 
-Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide switches which analysis job's confidence scores are shown. Jetson is the export and the engine build.
+Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide switches which analysis job's confidence scores are shown. Jetson copies the export command, writes the ONNX and JSON, and opens that folder in Finder or Explorer.
 
 ## Belt stage 1 counts
 

@@ -301,7 +301,7 @@
         </p>
       {% endif %}
       {% if model.frozen %}
-        <p>Uncertain is a hold: the winning score is under {{ model.threshold }}. It is not a third class. <a href="{{ url_for('jetson_page') }}">Jetson</a> is how this checkpoint becomes the engine on the belt.</p>
+        <p>Uncertain is a hold: the winning score is under {{ model.threshold }}. It is not a third class. <a href="{{ url_for('jetson_page') }}">Export for the Jetson</a>.</p>
       {% else %}
         <p class="hint">This checkpoint has no frozen hold. A blank threshold on Run leaves every frame on its winning class.</p>
       {% endif %}

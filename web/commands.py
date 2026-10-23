@@ -3,6 +3,7 @@
 import os
 import shlex
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +41,29 @@ def _is_bash(arg):
     return Path(arg).name.lower() in {"bash", "bash.exe"}
 
 
+def _display_interpreter(executable):
+    """A command a Windows cmd prompt can run, and a Mac terminal too.
+
+    The lab process is often ``.../MacOS/Python``. That path only exists
+    on this Mac. ``Python`` does not start with a lowercase ``python``,
+    so the old check left the whole path in the preview.
+    """
+    path = Path(executable)
+    if os.name == "nt":
+        try:
+            relative = path.resolve().relative_to(ROOT.resolve())
+        except ValueError:
+            relative = None
+        if relative is not None:
+            return str(relative)
+        venv_python = ROOT / ".venv" / "Scripts" / "python.exe"
+        if venv_python.is_file():
+            return str(venv_python.relative_to(ROOT))
+    if path.name.lower().startswith("python"):
+        return "python"
+    return str(path)
+
+
 def display_argv(argv):
     args = list(argv)
     if (
@@ -49,14 +73,16 @@ def display_argv(argv):
         and args[1].endswith("colab_train.sh")
     ):
         args = ["./colab_train.sh", *args[2:]]
-    elif args and Path(args[0]).name.startswith("python"):
-        args = ["python", *args[1:]]
+    elif args and Path(args[0]).name.lower().startswith("python"):
+        args = [_display_interpreter(args[0]), *args[1:]]
+    if os.name == "nt":
+        return subprocess.list2cmdline([str(arg) for arg in args])
     shown = []
     for index, arg in enumerate(args):
         if index == 0:
             shown.append(arg)
         else:
-            shown.append(shlex.quote(arg))
+            shown.append(shlex.quote(str(arg)))
     return " ".join(shown)
 
 
@@ -217,6 +243,8 @@ def prepare(form, require_confirm=True):
     kind = (form.get("kind") or "train").strip()
     if kind == "train":
         return _prepare_train(form, require_confirm)
+    if kind == "onnx":
+        return _prepare_onnx(form)
     if kind == "eval":
         return _prepare_eval(form)
     if kind == "analyze":
@@ -232,6 +260,31 @@ def prepare(form, require_confirm=True):
     if kind == "stop-t4":
         return _prepare_stop(form, require_confirm)
     raise CommandError("Unknown action.")
+
+
+def _prepare_onnx(form):
+    data_dir = _data_dir(form.get("data_dir") or "data_belt_stage1")
+    argv = [
+        _python(),
+        "export_onnx.py",
+        "--check",
+        "--data-dir",
+        data_dir,
+    ]
+    return Prepared(argv, "Export ONNX", display_argv(argv), False, "")
+
+
+def onnx_display(data_dir="data_belt_stage1"):
+    """The export line, quoted for this machine's shell."""
+    return display_argv(
+        [
+            _python(),
+            "export_onnx.py",
+            "--check",
+            "--data-dir",
+            data_dir,
+        ]
+    )
 
 
 def _prepare_train(form, require_confirm):
