@@ -136,11 +136,11 @@ Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes 
 
 | Split | Stage 1 metal | Belt metal | Stage 1 plastic | Belt plastic | Total |
 |---|---:|---:|---:|---:|---:|
-| Train | 680 | 680 | 3,949 | 3,946 | 9,255 |
-| Validation | 282 | 93 | 406 | 712 | 1,493 |
+| Train | 682 | 680 | 3,949 | 3,946 | 9,257 |
+| Validation | 280 | 93 | 406 | 712 | 1,491 |
 | Test | 242 | 134 | 60 | 90 | 526 |
 
-Stage 1 metal is split about evenly: 282 validation, 242 test. With the belt cans, metal is 375 validation and 376 test. Locked stage 1 test stems stay in test. The 28–30 September can windows are unchanged, including the 24 boundary frames. The 180 cans from 25 September stay in train and validation. The six foil trays the current checkpoint calls plastic are three in validation and three in test. Plastic counts are unchanged. The scored result above is still the original balanced test, 150 metal and 150 plastic. Synthetic stage 1 copies are not in the dataset.
+Stage 1 metal is split about evenly: 280 validation, 242 test. With the belt cans, metal is 373 validation and 376 test. Locked stage 1 test stems stay in test. The 28–30 September can windows are unchanged, including the 24 boundary frames. The 180 cans from 25 September stay in train and validation. The six foil trays the current checkpoint calls plastic are two in train, one in validation, and three in test. Plastic counts are unchanged. The scored result above is still the original balanced test, 150 metal and 150 plastic. Synthetic stage 1 copies are not in the dataset.
 
 ## Weights and logs
 

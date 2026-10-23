@@ -94,7 +94,7 @@ These scripts do not train. They exist because the photos arrived in different s
 - The scored test is 150 metal and 150 plastic. Locked stage 1 test stems stay in test.
 - The 28–30 September cans keep a contiguous validation and test window. The two-frame gap on each side goes to test.
 - Synthetic stage 1 NonPlastic copies are dropped.
-- Real stage 1 NonPlastic training photos are cut down to 680 so they match the 680 belt cans in train. The rest start in test, then move to validation until metal validation and metal test differ by at most one. A 5-second burst stays together. The six foil trays called plastic are pinned three to each side.
+- Real stage 1 NonPlastic training photos are cut down to 680 so they match the 680 belt cans in train. The rest start in test, then move to validation until metal validation and metal test differ by at most one. A 5-second burst stays together. The six foil trays called plastic are pinned two to train, one to validation, and three to test.
 - The same filename and the same file bytes are checked across train, validation, and test.
 
 **`prepare_drive_data.py`** runs on the Colab VM. It unzips the Drive archive onto local VM disk and remaps `NonPlastic` → `metal`. Training then reads local files. Reading every batch through Drive’s network filesystem is what made earlier runs stall.

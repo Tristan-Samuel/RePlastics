@@ -12,7 +12,8 @@ Stage1 metal validation and the original test sample stay at 40. Other
 real stage1 NonPlastic photos start in test, then move into validation
 until metal validation and metal test differ by at most one. Locked
 test stems stay in test. A 5-second burst moves together. The six foil
-trays the current checkpoint calls plastic are pinned three to each side.
+trays the current checkpoint calls plastic are pinned two to train, one
+to validation, and three to test.
 """
 
 from __future__ import annotations
@@ -56,13 +57,19 @@ LONG_SIDE = 224
 JPEG_QUALITY = 90
 BURST_GAP_SECONDS = 5
 # Foil trays the belt stage 1 checkpoint calls plastic
-# (analysis/belt-stage1/stage1_excluded/scores.tsv). 00501 and 00537
-# are locked test stems, so that pair stays in test. 00504 is the same
-# pass as 00501.
-SHEET_FAIL_TO_VAL = frozenset(
+# (analysis/belt-stage1/stage1_excluded/scores.tsv).
+# 00307 and 00490 are a few seconds from frames already in train, so
+# they join that split. 00660 stays in validation. 00501 and 00537 are
+# locked test stems, so that pair stays in test. 00504 is the same pass
+# as 00501.
+SHEET_FAIL_TO_TRAIN = frozenset(
     {
         "Others_capture_00307_20251205_183241_392897",
         "Others_capture_00490_20251205_185518_884539",
+    }
+)
+SHEET_FAIL_TO_VAL = SHEET_FAIL_TO_TRAIN | frozenset(
+    {
         "Others_capture_00660_20251205_190834_342101",
     }
 )
@@ -578,12 +585,19 @@ def rebalance_stage1_metal(stage_rows, other_val_metal, other_test_metal):
             if split != "test" or class_name != "metal":
                 raise SystemExit(f"{path.name} was not stage1 test metal.")
             split = "validation"
+        if path.stem in SHEET_FAIL_TO_TRAIN:
+            split = "train"
         updated.append((split, class_name, origin, path, resize))
+    held_val = SHEET_FAIL_TO_VAL - SHEET_FAIL_TO_TRAIN
+    if not held_val or not SHEET_FAIL_TO_TRAIN or not SHEET_FAIL_STAY_TEST:
+        raise SystemExit("Foil-tray failures are missing from a split.")
     print(
-        f"Stage1 metal test -> validation: {len(move_stems)}. "
-        f"Metal will be {val_metal + len(move_stems)} validation / "
+        f"Stage1 metal test -> validation: {len(move_stems) - len(SHEET_FAIL_TO_TRAIN)}. "
+        f"Foil trays test -> train: {len(SHEET_FAIL_TO_TRAIN)}. "
+        f"Metal will be {val_metal + len(move_stems) - len(SHEET_FAIL_TO_TRAIN)} validation / "
         f"{test_metal - len(move_stems)} test. "
-        f"Foil trays in validation: {', '.join(sorted(SHEET_FAIL_TO_VAL))}. "
+        f"Foil trays in train: {', '.join(sorted(SHEET_FAIL_TO_TRAIN))}. "
+        f"Foil trays in validation: {', '.join(sorted(held_val))}. "
         f"Foil trays left in test: {', '.join(sorted(SHEET_FAIL_STAY_TEST))}.",
         flush=True,
     )
