@@ -39,7 +39,7 @@
 
   <section id="errors">
     <h2>Errors</h2>
-    <p>Argmax errors. <code>analyze.py</code> still counts a low-score miss as a mistake. <code>predict.py</code> moves frames under the hold into Held.</p>
+    <p class="hint">Argmax misses. A low score is still a miss here. Frames under the hold are listed in Held.</p>
     {% if run.montages %}
       <div class="grid">
         {% for card in run.montages %}{{ figure(card) }}{% endfor %}
@@ -67,7 +67,7 @@
 
   <section id="held">
     <h2>Held</h2>
-    <p>Frames <code>predict.py</code> labeled uncertain. They are left out of the mistake image.</p>
+    <p class="hint">Frames labeled uncertain. They are left out of the mistake list.</p>
     {% if run.held %}
       <div class="grid">
         {% for row in run.held %}

@@ -1,35 +1,40 @@
 <section class="log-panel" id="log-panel">
   <div class="log-bar">
-    <div>
-      <h2>Job log</h2>
-      <p id="job-status">
-        {% if job_state.running %}
-          {{ job_state.title }} · {{ job_state.status_line }}
-        {% elif job_state.command %}
-          {{ job_state.status_line }}
-        {% else %}
-          No job yet.
-        {% endif %}
-      </p>
-    </div>
+    <button
+      type="button"
+      id="log-toggle"
+      aria-controls="log-body"
+      aria-expanded="{{ 'true' if job_state.running else 'false' }}"
+    >Job log</button>
+    <p id="job-status">
+      {% if job_state.running %}
+        {{ job_state.title }} · {{ job_state.status_line }}
+      {% elif job_state.command %}
+        {{ job_state.status_line }}
+      {% else %}
+        No job yet.
+      {% endif %}
+    </p>
     <div class="log-actions">
-      <button type="button" id="copy-log">Copy log</button>
+      <button type="button" id="copy-log" class="ghost">Copy</button>
       <form method="post" action="{{ url_for('stop_job') }}">
         <button id="stop-job" {% if not job_state.running %}disabled{% endif %}>Stop job</button>
       </form>
     </div>
   </div>
-  <pre id="log"></pre>
-  <form
-    id="stdin-form"
-    method="post"
-    action="{{ url_for('job_stdin') }}"
-    {% if not job_state.running %}hidden{% endif %}
-  >
-    <label>
-      If the log asks for a code, paste it here
-      <input name="text" autocomplete="off" spellcheck="false">
-    </label>
-    <button>Send</button>
-  </form>
+  <div id="log-body" {% if not job_state.running %}hidden{% endif %}>
+    <pre id="log"></pre>
+    <form
+      id="stdin-form"
+      method="post"
+      action="{{ url_for('job_stdin') }}"
+      {% if not job_state.running %}hidden{% endif %}
+    >
+      <label>
+        If the log asks for a code, paste it here
+        <input name="text" autocomplete="off" spellcheck="false">
+      </label>
+      <button>Send</button>
+    </form>
+  </div>
 </section>

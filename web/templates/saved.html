@@ -9,7 +9,7 @@
     <div class="buttons">
       <form method="post" action="{{ url_for('reveal') }}">
         <input type="hidden" name="path" value="{{ item.rel }}">
-        <button>Reveal in Finder</button>
+        <button class="ghost">Show in folder</button>
       </form>
       <form method="post" action="{{ url_for('zip_folder') }}">
         <input type="hidden" name="path" value="{{ item.rel }}">

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 from torchvision import transforms
 
 
@@ -12,7 +12,29 @@ CLASS_ALIASES = {
     "nonplastic": "metal",
     "metal": "metal",
     "plastic": "plastic",
+    "hdpe": "plastic",
+    "pet": "plastic",
+    "pp": "plastic",
+    "others": "metal",
+    "other": "metal",
 }
+
+RESIN_ALIASES = {
+    "hdpe": "HDPE",
+    "pet": "PET",
+    "pp": "PP",
+    "others": "OTHERS",
+    "other": "OTHERS",
+}
+
+RESIN_TO_CLASS = {
+    "HDPE": "plastic",
+    "PET": "plastic",
+    "PP": "plastic",
+    "OTHERS": "metal",
+}
+
+RESIN_TAGS = ("OTHERS", "HDPE", "PET", "PP")
 
 
 def class_key(name):
@@ -27,7 +49,24 @@ def mapped_class(name):
     return CLASS_ALIASES.get(class_key(name))
 
 
+def resin_from_path(path):
+    """HDPE / PET / PP / OTHERS from a `_RESIN` filename tag or folder."""
+    path = Path(path)
+    stem = path.stem.upper()
+    for resin in RESIN_TAGS:
+        if stem.endswith("_" + resin) or stem.endswith("-" + resin):
+            return resin
+    for part in reversed(path.parts[:-1]):
+        mapped = RESIN_ALIASES.get(class_key(part))
+        if mapped is not None:
+            return mapped
+    return None
+
+
 def true_class_from_path(path):
+    resin = resin_from_path(path)
+    if resin is not None:
+        return RESIN_TO_CLASS[resin]
     for part in reversed(Path(path).parts):
         mapped = mapped_class(part)
         if mapped is not None:
@@ -36,8 +75,32 @@ def true_class_from_path(path):
 
 
 def load_rgb(path):
+    path = Path(path)
+    if path.stat().st_size == 0:
+        raise UnidentifiedImageError("empty file")
     with Image.open(path) as image:
         return ImageOps.exif_transpose(image).convert("RGB")
+
+
+def readable_image_paths(paths):
+    """Drop empty or corrupt files so a camera dump can still be scored."""
+    kept = []
+    skipped = 0
+    for path in paths:
+        path = Path(path)
+        try:
+            if path.stat().st_size == 0:
+                raise UnidentifiedImageError("empty file")
+            with Image.open(path):
+                pass
+        except OSError as error:
+            print(f"skip {path}: {error}", flush=True)
+            skipped += 1
+            continue
+        kept.append(path)
+    if skipped:
+        print(f"Skipped {skipped} unreadable image(s).", flush=True)
+    return kept
 
 
 def inference_transform():

@@ -1,0 +1,65 @@
+<p class="meta">{{ "{:,}".format(row.total) }} photos · {{ "{:,}".format(row.metal) }} metal · {{ "{:,}".format(row.plastic) }} plastic</p>
+<table>
+  <thead>
+    <tr><th>Split</th><th>Metal</th><th>Plastic</th><th>Total</th></tr>
+  </thead>
+  <tbody>
+    {% for split in row.splits %}
+      <tr>
+        <td>{{ split.name }}</td>
+        <td>{{ "{:,}".format(split.metal) }}</td>
+        <td>{{ "{:,}".format(split.plastic) }}</td>
+        <td>{{ "{:,}".format(split.total) }}</td>
+      </tr>
+    {% endfor %}
+    <tr>
+      <th>All</th>
+      <th>{{ "{:,}".format(row.metal) }}</th>
+      <th>{{ "{:,}".format(row.plastic) }}</th>
+      <th>{{ "{:,}".format(row.total) }}</th>
+    </tr>
+  </tbody>
+</table>
+{% if row.loose %}
+  <p>Unsplitted source folders:</p>
+  <ul>
+    {% for item in row.loose %}
+      <li>{{ item.name }}: {{ "{:,}".format(item.count) }}</li>
+    {% endfor %}
+  </ul>
+{% endif %}
+<h3>Resin tag</h3>
+<table>
+  <thead>
+    <tr><th>Tag</th><th>Metal</th><th>Plastic</th><th>Total</th></tr>
+  </thead>
+  <tbody>
+    {% for item in row.resins %}
+      <tr>
+        <td>{{ item.name }}</td>
+        <td>{{ "{:,}".format(item.metal) }}</td>
+        <td>{{ "{:,}".format(item.plastic) }}</td>
+        <td>{{ "{:,}".format(item.total) }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="hint">PET, HDPE, and PP are plastic. OTHERS is the reject bucket and is counted as metal. A leading <code>Others_</code> or a trailing <code>_OTHERS</code> both count. No tag is mostly the September cans.</p>
+{% if row.origins %}
+  <h3>Where they came from</h3>
+  <table>
+    <thead>
+      <tr><th>Source</th><th>Metal</th><th>Plastic</th><th>Total</th></tr>
+    </thead>
+    <tbody>
+      {% for item in row.origins %}
+        <tr>
+          <td>{{ item.label }}</td>
+          <td>{{ "{:,}".format(item.metal) }}</td>
+          <td>{{ "{:,}".format(item.plastic) }}</td>
+          <td>{{ "{:,}".format(item.total) }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}

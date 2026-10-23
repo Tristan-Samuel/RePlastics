@@ -1,4 +1,4 @@
-"""Repo paths and the checks that keep zip and Finder inside them."""
+"""Repo paths and the checks that keep zip and folder reveal inside them."""
 
 from pathlib import Path
 
@@ -22,7 +22,7 @@ def is_relative_inside(path, root):
 
 
 def reveal_allowed(path):
-    """Finder may open a repo file, the belt zip, or a zip this app wrote."""
+    """The file manager may open a repo file, the belt zip, or a zip this app wrote."""
     resolved = Path(path).resolve()
     if is_relative_inside(resolved, ROOT):
         return True

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Lab{% endblock %} · Metal / plastic</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=9">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=12">
 </head>
 <body
   data-running="{{ 'yes' if job_state.running else 'no' }}"
@@ -18,12 +18,12 @@
       <a href="{{ url_for('jobs_page') }}" {% if request.endpoint == 'jobs_page' %}aria-current="page"{% endif %}>Jobs</a>
       <a href="{{ url_for('jetson_page') }}" {% if request.endpoint == 'jetson_page' %}aria-current="page"{% endif %}>Jetson</a>
     </nav>
-    <span id="session" class="pill {% if session_state.up %}up{% endif %}">{{ session_state.label }}</span>
+    <span id="session" class="{% if session_state.up %}up{% endif %}">{{ session_state.label }}</span>
   </header>
   <main>
     {% block body %}{% endblock %}
   </main>
   {% include "_log.html" %}
-  <script src="{{ url_for('static', filename='app.js') }}?v=9"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=10"></script>
 </body>
 </html>

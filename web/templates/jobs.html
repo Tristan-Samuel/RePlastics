@@ -8,7 +8,7 @@
 
   <div class="preset-row">
     {% for preset in presets %}
-      <button type="button" class="preset" data-preset="{{ preset | tojson }}">{{ preset.label }}</button>
+      <button type="button" class="preset" data-preset='{{ preset | tojson }}'>{{ preset.label }}</button>
     {% endfor %}
   </div>
 
@@ -17,7 +17,7 @@
     <fieldset class="span-2">
       <legend>Where</legend>
       <label class="check"><input type="radio" name="where" value="colab" {% if defaults.where == 'colab' %}checked{% endif %}> T4 (Colab)</label>
-      <label class="check"><input type="radio" name="where" value="local" {% if defaults.where == 'local' %}checked{% endif %}> This Mac</label>
+      <label class="check"><input type="radio" name="where" value="local" {% if defaults.where == 'local' %}checked{% endif %}> This computer</label>
     </fieldset>
     <label class="check"><input type="checkbox" name="resume" {% if defaults.resume %}checked{% endif %}> Resume checkpoint</label>
     <label class="check"><input type="checkbox" name="keep" {% if defaults.keep %}checked{% endif %}> Keep the T4 up</label>
@@ -44,7 +44,7 @@
     <label>Weight power <input name="weight_power" value="{{ defaults.weight_power }}" inputmode="decimal"></label>
     <label class="span-2">Checkpoint <input name="model" value="{{ defaults.model }}"></label>
     <label class="span-2">
-      Dataset for this Mac, or for a T4 run that does not use Drive
+      Dataset for this computer, or for a T4 run that does not use Drive
       <select name="data_dir">
         {% for name in data_roots %}
           <option {% if name == defaults.data_dir %}selected{% endif %}>{{ name }}</option>
@@ -56,7 +56,7 @@
       <pre id="preview">…</pre>
     </div>
     <div class="span-2 buttons">
-      <button id="start-train">Start</button>
+      <button id="start-train" class="primary">Start</button>
     </div>
   </form>
 
@@ -69,5 +69,5 @@
     <input type="hidden" name="kind" value="stop-t4">
     <button>Stop T4</button>
   </form>
-  <p class="hint">Stop T4 ends the Colab session named trainer. Stop job, in the log, only ends the process on this Mac.</p>
+  <p class="hint">Stop T4 ends the Colab session named trainer. Stop job, in the log, only ends the process on this computer.</p>
 {% endblock %}

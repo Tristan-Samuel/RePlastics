@@ -35,7 +35,7 @@ PRESETS = (
     },
     {
         "id": "belt_fc_mac",
-        "label": "Belt head on this Mac",
+        "label": "Belt head on this computer",
         "where": "local",
         "keep": False,
         "drive": False,

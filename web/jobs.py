@@ -12,9 +12,34 @@ from web.paths import JOB_LOGS, ROOT
 
 
 def _alive(pid):
+    """True when pid is still running. On Windows, signal 0 kills the process."""
+    if os.name == "nt":
+        import ctypes
+
+        query = 0x1000  # PROCESS_QUERY_LIMITED_INFORMATION
+        handle = ctypes.windll.kernel32.OpenProcess(query, False, int(pid))
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
     try:
         os.kill(pid, 0)
     except OSError:
+        return False
+    return True
+
+
+def _stop_tree(pid):
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/T", "/PID", str(pid)],
+            check=False,
+            capture_output=True,
+        )
+        return True
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
         return False
     return True
 
@@ -136,16 +161,20 @@ class Runner:
             self._append_unlocked(prepared.display)
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
+            env["MPLBACKEND"] = "Agg"
+            popen = {
+                "cwd": str(ROOT),
+                "stdin": subprocess.PIPE,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.STDOUT,
+                "env": env,
+            }
+            if os.name == "nt":
+                popen["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                popen["start_new_session"] = True
             try:
-                self.proc = subprocess.Popen(
-                    prepared.argv,
-                    cwd=str(ROOT),
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    env=env,
-                    start_new_session=True,
-                )
+                self.proc = subprocess.Popen(prepared.argv, **popen)
             except OSError as error:
                 self.running = False
                 self.exit_code = 1
@@ -211,11 +240,7 @@ class Runner:
                 pid = self._orphan_pid
             if pid is None:
                 return False
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return False
-        return True
+        return _stop_tree(pid)
 
     def write_stdin(self, text):
         with self._lock:

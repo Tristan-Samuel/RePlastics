@@ -1,8 +1,10 @@
 """HTTP routes for the lab app."""
 
 import json
+import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import zipfile
@@ -43,6 +45,7 @@ _watch_started = False
 def create_app():
     global _watch_started
     app = Flask(__name__)
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
     if not _watch_started:
         threading.Thread(target=_watch_session, daemon=True).start()
         _watch_started = True
@@ -125,13 +128,42 @@ def create_app():
             request.args.get("run"),
             request.args.get("confidence"),
         )
+        data_name = _chosen_data(request.args.get("data"))
+        catalog.link_run_sources(page["run"], data_name)
         return render_template(
             "model.html",
             model=model,
             page=page,
             data_roots=DATA_ROOTS,
             steps=STEPS,
-            default_data=_default_data(),
+            default_data=data_name,
+            composition=catalog.composition(data_name),
+        )
+
+    @app.get("/datasets/<name>/images")
+    def dataset_images(name):
+        if name not in DATA_ROOTS:
+            abort(404)
+        return catalog.search_images(
+            name,
+            request.args.get("q") or "",
+            request.args.get("split") or "",
+            request.args.get("class") or "",
+            request.args.get("resin") or "",
+            request.args.get("origin") or "",
+        )
+
+    @app.get("/models/<stem>/scores.json")
+    def model_scores(stem):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", stem):
+            abort(404)
+        model = catalog.model_by_stem(stem)
+        if model is None:
+            abort(404)
+        return catalog.scores_for_model(
+            model,
+            request.args.get("run"),
+            request.args.get("confidence"),
         )
 
     @app.get("/saved/<slug>")
@@ -235,7 +267,7 @@ def create_app():
         path = _form_path(request.form.get("path") or "")
         if path is None or not path.exists() or not reveal_allowed(path):
             abort(404)
-        subprocess.run(["open", "-R", str(path.resolve())], check=False)
+        _show_in_folder(path)
         return _back()
 
     @app.post("/actions/zip")
@@ -274,6 +306,12 @@ def _default_data():
     return DATA_ROOTS[0]
 
 
+def _chosen_data(raw):
+    if raw in DATA_ROOTS and (ROOT / raw).is_dir():
+        return raw
+    return _default_data()
+
+
 def _form_path(raw):
     text = raw.strip()
     if not text or "\x00" in text:
@@ -282,6 +320,18 @@ def _form_path(raw):
     if not path.is_absolute():
         path = ROOT / path
     return path
+
+
+def _show_in_folder(path):
+    resolved = path.resolve()
+    if os.name == "nt":
+        subprocess.run(["explorer", f"/select,{resolved}"], check=False)
+        return
+    if sys.platform == "darwin":
+        subprocess.run(["open", "-R", str(resolved)], check=False)
+        return
+    folder = resolved if resolved.is_dir() else resolved.parent
+    subprocess.run(["xdg-open", str(folder)], check=False)
 
 
 def _back():

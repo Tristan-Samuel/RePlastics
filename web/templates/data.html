@@ -13,38 +13,14 @@
         {% if row.present %}
           <form method="post" action="{{ url_for('reveal') }}">
             <input type="hidden" name="path" value="{{ row.name }}">
-            <button>Reveal in Finder</button>
+            <button class="ghost">Show in folder</button>
           </form>
         {% endif %}
       </div>
       {% if not row.present %}
         <p>Not on disk.</p>
       {% else %}
-        <table>
-          <thead>
-            <tr><th>Split</th><th>Metal</th><th>Plastic</th><th>Total</th></tr>
-          </thead>
-          <tbody>
-            {% for split in row.splits %}
-              <tr>
-                <td>{{ split.name }}</td>
-                <td>{{ split.metal }}</td>
-                <td>{{ split.plastic }}</td>
-                <td>{{ split.total }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% if row.loose %}
-          <p>Unsplitted source folders:</p>
-          <ul>
-            {% for item in row.loose %}
-              <li>{{ item.name }}: {{ item.count }}</li>
-            {% endfor %}
-          </ul>
-        {% else %}
-          <p>No unsplitted metal or plastic folder.</p>
-        {% endif %}
+        {% include "_composition.html" %}
         <form
           method="post"
           action="{{ url_for('start_job') }}"
@@ -52,7 +28,7 @@
         >
           <input type="hidden" name="kind" value="split">
           <input type="hidden" name="data_dir" value="{{ row.name }}">
-          <button>Split {{ row.name }}</button>
+          <button class="primary">Split {{ row.name }}</button>
         </form>
       {% endif %}
     </section>
@@ -66,15 +42,15 @@
       <form
         method="post"
         action="{{ url_for('start_job') }}"
-        data-confirm="This rebuilds data_belt_stage1 and ~/Downloads/belt_stage1_224.zip. Continue?"
+        data-confirm="This rebuilds data_belt_stage1 and belt_stage1_224.zip in Downloads. Continue?"
       >
         <input type="hidden" name="kind" value="belt-zip">
-        <button>Build 224 zip</button>
+        <button class="primary">Build 224 zip</button>
       </form>
       {% if belt_zip_exists %}
         <form method="post" action="{{ url_for('reveal') }}">
           <input type="hidden" name="path" value="{{ belt_zip }}">
-          <button>Reveal zip in Finder</button>
+          <button class="ghost">Show in folder</button>
         </form>
       {% endif %}
     </div>

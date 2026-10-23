@@ -84,6 +84,16 @@ def parse_args():
         help="Learning rate for the classification head.",
     )
     parser.add_argument(
+        "--weight-power",
+        type=float,
+        default=1.0,
+        help=(
+            "Exponent on inverse-frequency class weights. "
+            "1 keeps the full metal boost; 0.5 softens it; "
+            "0 is unweighted."
+        ),
+    )
+    parser.add_argument(
         "--lr-backbone",
         type=float,
         default=None,
@@ -152,7 +162,7 @@ print("Network input: 224x224", flush=True)
 
 loader_options = {
     "batch_size": BATCH_SIZE,
-    "num_workers": 4 if device.type == "cuda" else 0,
+    "num_workers": 4 if device.type == "cuda" and os.name != "nt" else 0,
     "pin_memory": device.type == "cuda",
 }
 if loader_options["num_workers"] > 0:
@@ -233,6 +243,18 @@ test_loader = DataLoader(
 print(f"Training images:   {len(training_images)}", flush=True)
 print(f"Validation images: {len(validation_images)}", flush=True)
 print(f"Test images:       {len(test_images)}", flush=True)
+
+
+def class_counts(dataset):
+    counts = [0] * len(dataset.classes)
+    for _path, label in dataset.samples:
+        counts[label] += 1
+    return counts
+
+
+train_counts = class_counts(training_images)
+for class_name, count in zip(training_images.classes, train_counts):
+    print(f"  train {class_name}: {count}", flush=True)
 
 
 # ---------------------------------------------------------
@@ -370,7 +392,32 @@ print(
 # Loss function + optimizer
 # ---------------------------------------------------------
 
-criterion = nn.CrossEntropyLoss()
+# Inverse-frequency weights so a 26:1 plastic/metal train
+# split still updates the head on cans. Val/test loss stays
+# unweighted so the number matches overall accuracy.
+train_count_tensor = torch.tensor(
+    train_counts,
+    dtype=torch.float32,
+)
+if args.weight_power < 0:
+    raise SystemExit("--weight-power must be >= 0")
+class_weight = (
+    train_count_tensor.sum()
+    / (len(train_count_tensor) * train_count_tensor.clamp(min=1))
+).pow(args.weight_power).to(device)
+print(
+    f"Class weights (power {args.weight_power:g}): "
+    + ", ".join(
+        f"{name} {weight:.3f}"
+        for name, weight in zip(
+            training_images.classes,
+            class_weight.tolist(),
+        )
+    ),
+    flush=True,
+)
+train_criterion = nn.CrossEntropyLoss(weight=class_weight)
+eval_criterion = nn.CrossEntropyLoss()
 optimizer = build_optimizer(model, args)
 
 
@@ -379,6 +426,9 @@ def score_loader(data_loader, log_label):
     running_loss = 0.0
     correct_predictions = 0
     total_predictions = 0
+    n_classes = len(training_images.classes)
+    correct_by_class = [0] * n_classes
+    total_by_class = [0] * n_classes
 
     with torch.no_grad():
         for batch_index, (images, labels) in enumerate(
@@ -388,7 +438,7 @@ def score_loader(data_loader, log_label):
             images = images.to(device)
             labels = labels.to(device)
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            loss = eval_criterion(outputs, labels)
             batch_loss = loss.item()
             running_loss += batch_loss * images.size(0)
             predicted_classes = outputs.argmax(dim=1)
@@ -396,6 +446,18 @@ def score_loader(data_loader, log_label):
                 predicted_classes == labels
             ).sum().item()
             total_predictions += labels.size(0)
+            for class_index in range(n_classes):
+                class_mask = labels == class_index
+                class_total = int(class_mask.sum().item())
+                if class_total == 0:
+                    continue
+                total_by_class[class_index] += class_total
+                correct_by_class[class_index] += int(
+                    (
+                        predicted_classes[class_mask]
+                        == labels[class_mask]
+                    ).sum().item()
+                )
             print(
                 f"  {log_label} batch "
                 f"{batch_index}/{len(data_loader)} "
@@ -404,9 +466,35 @@ def score_loader(data_loader, log_label):
                 flush=True,
             )
 
+    class_parts = []
+    for class_name, correct, total in zip(
+        training_images.classes,
+        correct_by_class,
+        total_by_class,
+    ):
+        if total:
+            class_parts.append(
+                f"{class_name} {correct}/{total} ({correct / total:.1%})"
+            )
+    recalls = [
+        correct / total
+        for correct, total in zip(correct_by_class, total_by_class)
+        if total
+    ]
+    balanced_accuracy = (
+        sum(recalls) / len(recalls) if recalls else 0.0
+    )
+    if class_parts:
+        print(
+            f"  {log_label} by class: {' | '.join(class_parts)} | "
+            f"balanced {balanced_accuracy:.1%}",
+            flush=True,
+        )
+
     return (
         running_loss / total_predictions,
         correct_predictions / total_predictions,
+        balanced_accuracy,
     )
 
 
@@ -583,6 +671,7 @@ def save_checkpoint(test_accuracy=None):
         "model_state_dict": best_model_weights,
         "class_to_idx": training_images.class_to_idx,
         "best_validation_accuracy": best_validation_accuracy,
+        "best_balanced_accuracy": best_balanced_accuracy,
     }
 
     if test_accuracy is not None:
@@ -592,6 +681,7 @@ def save_checkpoint(test_accuracy=None):
 
 
 best_validation_accuracy = 0.0
+best_balanced_accuracy = 0.0
 best_model_weights = copy.deepcopy(
     model.state_dict()
 )
@@ -601,7 +691,11 @@ if args.resume:
         "Scoring the current checkpoint on validation before training...",
         flush=True,
     )
-    validation_loss, best_validation_accuracy = score_loader(
+    (
+        validation_loss,
+        best_validation_accuracy,
+        best_balanced_accuracy,
+    ) = score_loader(
         validation_loader,
         "Starting val",
     )
@@ -609,7 +703,8 @@ if args.resume:
         f"Starting validation loss: "
         f"{validation_loss:.4f} | "
         f"Starting validation accuracy: "
-        f"{best_validation_accuracy:.2%}",
+        f"{best_validation_accuracy:.2%} | "
+        f"balanced {best_balanced_accuracy:.2%}",
         flush=True,
     )
 
@@ -641,7 +736,7 @@ for epoch in range(args.epochs):
         outputs = model(images)
 
         # Compare predictions against correct labels.
-        loss = criterion(outputs, labels)
+        loss = train_criterion(outputs, labels)
 
         # Calculate gradients.
         loss.backward()
@@ -683,7 +778,7 @@ for epoch in range(args.epochs):
     )
 
 
-    validation_loss, validation_accuracy = score_loader(
+    validation_loss, validation_accuracy, balanced_accuracy = score_loader(
         validation_loader,
         "Val",
     )
@@ -699,19 +794,21 @@ for epoch in range(args.epochs):
         f"Val loss: {validation_loss:.4f} | "
         f"Train accuracy: {train_accuracy:.2%} | "
         f"Validation accuracy: "
-        f"{validation_accuracy:.2%}",
+        f"{validation_accuracy:.2%} | "
+        f"balanced {balanced_accuracy:.2%}",
         flush=True,
     )
 
 
     # Keep the best version of the model, and write it
     # to disk immediately so a crash or Ctrl+C does not
-    # lose the weights.
-    if validation_accuracy > best_validation_accuracy:
+    # lose the weights. Overall accuracy is the wrong
+    # score on a 4% metal split: a model that still
+    # misses every can can look like 96%.
+    if balanced_accuracy > best_balanced_accuracy:
 
-        best_validation_accuracy = (
-            validation_accuracy
-        )
+        best_balanced_accuracy = balanced_accuracy
+        best_validation_accuracy = validation_accuracy
 
         best_model_weights = copy.deepcopy(
             model.state_dict()
@@ -721,7 +818,8 @@ for epoch in range(args.epochs):
 
         print(
             f"Saved best model so far to {MODEL_PATH} "
-            f"({best_validation_accuracy:.2%} val)",
+            f"({best_balanced_accuracy:.2%} balanced val, "
+            f"{best_validation_accuracy:.2%} overall)",
             flush=True,
         )
 
@@ -733,30 +831,9 @@ for epoch in range(args.epochs):
 model.load_state_dict(best_model_weights)
 model.eval()
 
-correct_predictions = 0
-total_predictions = 0
-
-with torch.no_grad():
-
-    for images, labels in test_loader:
-
-        images = images.to(device)
-        labels = labels.to(device)
-
-        outputs = model(images)
-
-        predicted_classes = outputs.argmax(dim=1)
-
-        correct_predictions += (
-            predicted_classes == labels
-        ).sum().item()
-
-        total_predictions += labels.size(0)
-
-
-test_accuracy = (
-    correct_predictions
-    / total_predictions
+_test_loss, test_accuracy, test_balanced = score_loader(
+    test_loader,
+    "Test",
 )
 
 
@@ -769,13 +846,14 @@ if not args.eval:
 
 print()
 print(
-    f"Best validation accuracy: "
-    f"{best_validation_accuracy:.2%}",
+    f"Best balanced validation: "
+    f"{best_balanced_accuracy:.2%} "
+    f"(overall {best_validation_accuracy:.2%})",
     flush=True,
 )
 print(
-    f"Test accuracy: "
-    f"{test_accuracy:.2%}",
+    f"Test accuracy: {test_accuracy:.2%} | "
+    f"balanced {test_balanced:.2%}",
     flush=True,
 )
 

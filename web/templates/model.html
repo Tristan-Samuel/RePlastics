@@ -1,166 +1,225 @@
 {% extends "base.html" %}
-{% from "_macros.html" import pct %}
+{% from "_macros.html" import metric, figure %}
 {% block title %}{{ model.stem }}{% endblock %}
 {% block watch %}yes{% endblock %}
 {% block body %}
-  <div class="model-layout">
-    <nav class="toc">
-      <a href="#summary">Summary</a>
-      <a href="#actions">Actions</a>
-      <a href="#scores">Scores</a>
-      <a href="#errors">Errors</a>
-      <a href="#held">Held</a>
-      <a href="#cam">Correct Grad-CAM</a>
-      <a href="#maps">Feature maps</a>
-      <a href="#filters">Filters</a>
-      <a href="#space">Feature space</a>
-      <a href="#stats">Layer stats</a>
-      <a href="#report">Report</a>
-      {% if page.show_uncertain %}<a href="#uncertain">Uncertain hold</a>{% endif %}
-    </nav>
+  {% set run = page.run %}
+  {% set show_decide = page.has_scores or page.show_uncertain %}
+  {% set default_tab = 'overview' %}
+  <header class="model-head">
     <div>
-      <section id="summary">
-        <h1>{{ model.stem }}</h1>
-        <p><code>{{ model.rel }}</code></p>
-        {% if model.aliases %}
-          <p>Also called
-            {% for name in model.aliases %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
-          </p>
-        {% endif %}
-        <p>{{ model.mtime_label }} · {{ model.size_label }}</p>
-        <dl>
-          <div><dt>Validation</dt><dd>{{ pct(model.metrics.validation) }}</dd></div>
-          <div><dt>Balanced</dt><dd>{{ pct(model.metrics.balanced) }}</dd></div>
-          <div><dt>Test</dt><dd>{{ pct(model.metrics.test) }}</dd></div>
-        </dl>
-        {% if model.frozen %}
-          <p class="hold">Winning score below {{ model.threshold }} is uncertain. That cutoff is frozen in <code>decide.py</code>.</p>
-          <form method="post" action="{{ url_for('reveal') }}">
-            <input type="hidden" name="path" value="docs/belt_stage1_model_report.md">
-            <button>Reveal the written record in Finder</button>
-          </form>
-        {% endif %}
-        {% if model.rel in job_state.command %}
-          <p>Last command in the current log:</p>
-          <pre class="command">{{ job_state.command }}</pre>
-        {% else %}
-          <p>Start a job on this page and the log shows the command.</p>
-        {% endif %}
-      </section>
+      <h1 title="{{ model.stem }}">{{ model.stem|replace('_', '_​') }}</h1>
+      <p class="meta">{{ model.mtime_label }} · {{ model.size_label }}{% if model.frozen %} · hold &lt; {{ model.threshold }}{% endif %}</p>
+    </div>
+    <p class="scores">
+      {{ metric("Validation", model.metrics.validation) }}
+      {{ metric("Balanced", model.metrics.balanced) }}
+      {{ metric("Test", model.metrics.test) }}
+    </p>
+  </header>
 
-      <section id="actions" class="card">
-        <h2>Actions</h2>
-        {% if page.runs %}
-          <form method="get" class="picker">
-            <label>
-              Saved run
-              <select name="run" onchange="this.form.submit()">
-                {% for run in page.runs %}
-                  <option value="{{ run.rel }}" {% if page.selected and page.selected.rel == run.rel %}selected{% endif %}>{{ run.label }}</option>
-                {% endfor %}
-              </select>
-            </label>
-          </form>
-          {% if page.selected %}
-            <div class="buttons">
-              <form method="post" action="{{ url_for('reveal') }}">
-                <input type="hidden" name="path" value="{{ page.selected.rel }}">
-                <button>Reveal in Finder</button>
-              </form>
-              <form method="post" action="{{ url_for('zip_folder') }}">
-                <input type="hidden" name="path" value="{{ page.selected.rel }}">
-                <button>Zip this run</button>
-              </form>
-            </div>
-          {% endif %}
-        {% endif %}
-        <form method="post" action="{{ url_for('start_job') }}" class="form-grid">
-          <input type="hidden" name="model" value="{{ model.rel }}">
+  <div class="tabs" role="tablist" data-tabs data-default-tab="{{ default_tab }}">
+    <button type="button" role="tab" data-tab="overview" aria-selected="{{ 'true' if default_tab == 'overview' else 'false' }}">Overview</button>
+    {% if show_decide %}
+      <button type="button" role="tab" data-tab="decide" aria-selected="{{ 'true' if default_tab == 'decide' else 'false' }}">Decide</button>
+    {% endif %}
+    <button type="button" role="tab" data-tab="run" aria-selected="false">Run</button>
+  </div>
+
+  {% if show_decide %}
+    <div data-panel="decide" {% if default_tab != 'decide' %}hidden{% endif %}>
+      {% if page.runs|length > 1 %}
+        <form method="get" action="#decide" class="picker">
           <label>
-            Dataset
-            <select name="data_dir">
-              {% for name in data_roots %}
-                <option {% if name == default_data %}selected{% endif %}>{{ name }}</option>
+            Confidence
+            <select name="confidence" onchange="this.form.submit()">
+              {% for item in page.runs %}
+                <option value="{{ item.confidence_rel or item.rel }}" {% if page.confidence_choice == (item.confidence_rel or item.rel) %}selected{% endif %}>{{ item.label }}</option>
               {% endfor %}
             </select>
           </label>
-          <label>
-            Image paths, optional
-            <input name="images" placeholder="folder or file, space separated">
-          </label>
-          <label class="check span-2">
-            <input type="checkbox" name="both_splits">
-            Score validation and test
-          </label>
-          <fieldset class="span-2">
-            <legend>Analytics steps</legend>
-            {% for step in steps %}
-              <label class="check"><input type="checkbox" name="steps" value="{{ step }}" checked> {{ step }}</label>
-            {% endfor %}
-          </fieldset>
-          <label class="span-2">
-            Threshold override
-            <input name="threshold" inputmode="decimal" placeholder="blank keeps the belt stage 1 rule, and leaves other checkpoints alone">
-          </label>
-          <div class="span-2 buttons">
-            <button name="kind" value="eval">Run eval</button>
-            <button name="kind" value="analyze">Run full analytics</button>
-            <button name="kind" value="mistakes">Mistakes only</button>
-          </div>
+          {% if page.selected %}
+            <input type="hidden" name="run" value="{{ page.selected.rel }}">
+          {% endif %}
+          <input type="hidden" name="data" value="{{ default_data }}">
         </form>
-        <p class="hint">Eval and analytics write under <code>analysis/{{ model.stem }}/</code>. Mistakes only calls <code>predict.py</code>. Leave the threshold blank so belt stage 1 uses the frozen rule.</p>
-      </section>
-
-      {% set run = page.run %}
-      {% set eval_log = page.eval_log %}
-      {% include "_run.html" %}
-
-      {% if page.show_uncertain %}
-        <section id="uncertain">
-          <h2>Uncertain hold</h2>
-          <p class="hold">The live hold is still temperature {{ page.confidence.temperature }} and threshold {{ page.confidence.threshold }} in <code>decide.py</code>. A report writes plots and <code>summary.md</code>. It does not change <code>predict.py</code>.</p>
-          {% if page.confidences %}
-            <form method="get" class="picker">
-              {% if page.selected %}
-                <input type="hidden" name="run" value="{{ page.selected.rel }}">
-              {% endif %}
-              <label>
-                Confidence folder
-                <select name="confidence" onchange="this.form.submit()">
-                  {% for item in page.confidences %}
-                    <option value="{{ item.rel }}" {% if page.confidence.folder and page.confidence.folder.rel == item.rel %}selected{% endif %}>{{ item.label }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-            </form>
-          {% endif %}
-          {% if page.confidence.summary_html %}
-            <div class="prose">{{ page.confidence.summary_html }}</div>
-          {% else %}
-            <p>No confidence summary saved for this checkpoint yet.</p>
-          {% endif %}
-          {% if page.confidence.scored %}
-            <p>Test record: <code>{{ page.confidence.scored }}</code></p>
-          {% endif %}
-          <div class="grid wide">
-            {% if page.confidence.histogram %}
-              <figure class="shot">
-                <a href="{{ url_for('files', rel=page.confidence.histogram.rel) }}">
-                  <img src="{{ url_for('files', rel=page.confidence.histogram.rel) }}" alt="Validation confidence histogram">
-                </a>
-                <figcaption>Validation confidence</figcaption>
-              </figure>
-            {% endif %}
-            {% if page.confidence.reliability %}
-              <figure class="shot">
-                <a href="{{ url_for('files', rel=page.confidence.reliability.rel) }}">
-                  <img src="{{ url_for('files', rel=page.confidence.reliability.rel) }}" alt="Test reliability diagram">
-                </a>
-                <figcaption>Test reliability</figcaption>
-              </figure>
+      {% endif %}
+      {% if page.has_scores %}
+        <section
+          data-decide
+          data-scores-url="{{ url_for('model_scores', stem=model.stem, run=(page.selected.rel if page.selected else ''), confidence=(page.confidence.folder.rel if page.confidence and page.confidence.folder else '')) }}"
+          data-frozen="{{ model.threshold or '' }}"
+        >
+          <div class="decide-bar">
+            <div class="seg" role="group" aria-label="Split">
+              <button type="button" data-split-value="validation" aria-pressed="true">Validation</button>
+              <button type="button" data-split-value="test" aria-pressed="false">Test</button>
+              <button type="button" data-split-value="both" aria-pressed="false">Both</button>
+              <button type="button" data-split-value="excluded" aria-pressed="false" hidden>Left out</button>
+            </div>
+            <p class="hint" data-split-note></p>
+            {% if page.confidence and page.confidence.folder %}
+              <p class="meta">Scores from <code>{{ page.confidence.folder.label }}</code></p>
             {% endif %}
           </div>
-          {% if page.confidence.sweep %}
+          <p class="hint">Frames under the cutoff are held as uncertain. Drag the cutoff to see what would be sorted. This does not change the frozen rule.</p>
+
+          <div class="metrics" data-figures>
+            <div class="metric warn" data-fig="held">
+              <span class="num">—</span>
+              <span class="sub"></span>
+              <span class="lbl">Held</span>
+            </div>
+            <div class="metric accent" data-fig="caught">
+              <span class="num">—</span>
+              <span class="sub"></span>
+              <span class="lbl">Caught</span>
+            </div>
+            <div class="metric bad" data-fig="still">
+              <span class="num">—</span>
+              <span class="sub"></span>
+              <span class="lbl">Still wrong</span>
+            </div>
+            <div class="metric warn" data-fig="held-right">
+              <span class="num">—</span>
+              <span class="sub"></span>
+              <span class="lbl">Held but right</span>
+            </div>
+            <div class="metric accent" data-fig="accuracy">
+              <span class="num">—</span>
+              <span class="sub"></span>
+              <span class="lbl">Accuracy</span>
+            </div>
+            <div class="metric accent" data-fig="balanced">
+              <span class="num">—</span>
+              <span class="sub"></span>
+              <span class="lbl">Balanced</span>
+            </div>
+          </div>
+
+          <div class="chart-layout">
+            <div class="chart-panel">
+              <canvas data-hist width="900" height="260" aria-label="Winning score histogram. Drag to set the cutoff."></canvas>
+              <ul class="legend">
+                <li><i class="swatch correct"></i>Correct</li>
+                <li><i class="swatch wrong"></i>Wrong</li>
+                <li><i class="swatch std"></i>Mean ± 1 std</li>
+                <li><i class="swatch cut"></i>Cutoff</li>
+              </ul>
+            </div>
+            <div class="side-stack">
+              <table class="matrix" data-matrix>
+                <caption>Confusion</caption>
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>Metal</th>
+                    <th>Plastic</th>
+                    <th>Uncertain</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr data-row="metal">
+                    <th>True metal</th>
+                    <td data-cell="metal">—</td>
+                    <td data-cell="plastic">—</td>
+                    <td data-cell="uncertain">—</td>
+                  </tr>
+                  <tr data-row="plastic">
+                    <th>True plastic</th>
+                    <td data-cell="metal">—</td>
+                    <td data-cell="plastic">—</td>
+                    <td data-cell="uncertain">—</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="std-grid" data-std></div>
+            </div>
+          </div>
+
+          <div class="decide-controls">
+            <label>
+              Threshold
+              <input type="range" min="0.5" max="0.99" step="0.01" value="{{ model.threshold or '0.85' }}" data-threshold>
+              <input type="number" min="0.5" max="0.99" step="0.01" value="{{ model.threshold or '0.85' }}" data-threshold-num>
+            </label>
+            <label>
+              Score range
+              <div class="dual-range">
+                <input type="range" min="0.5" max="1" step="0.01" value="0.5" data-range-min aria-label="Range start">
+                <input type="range" min="0.5" max="1" step="0.01" value="1" data-range-max aria-label="Range end">
+              </div>
+            </label>
+            <div class="actions">
+              {% if model.frozen %}
+                <button type="button" class="ghost" data-use-frozen>Frozen {{ model.threshold }}</button>
+              {% endif %}
+              <button type="button" class="ghost" data-tail>Tail</button>
+              <button type="button" class="ghost" data-full>Full</button>
+            </div>
+          </div>
+
+          <div class="filters">
+            <label>
+              Class
+              <select data-decide-class>
+                <option value="any">Any</option>
+                <option value="metal">Metal</option>
+                <option value="plastic">Plastic</option>
+              </select>
+            </label>
+            <label>
+              Resin
+              <select data-decide-resin>
+                <option value="any">Any</option>
+                <option value="PET">PET</option>
+                <option value="HDPE">HDPE</option>
+                <option value="PP">PP</option>
+                <option value="OTHERS">OTHERS</option>
+                <option value="unknown">No resin tag</option>
+              </select>
+            </label>
+            <p class="hint">Counts use the whole split. Class and resin filter the photos.</p>
+          </div>
+
+          <div class="buckets">
+            <section class="bucket" data-bucket="still">
+              <header>
+                <h3>Still wrong</h3>
+                <p data-bucket-count></p>
+              </header>
+              <div class="grid" data-bucket-cards></div>
+            </section>
+            <section class="bucket" data-bucket="caught">
+              <header>
+                <h3>Caught</h3>
+                <p data-bucket-count></p>
+              </header>
+              <div class="grid" data-bucket-cards></div>
+            </section>
+            <section class="bucket" data-bucket="held-right">
+              <header>
+                <h3>Held but right</h3>
+                <p data-bucket-count></p>
+              </header>
+              <div class="grid" data-bucket-cards></div>
+            </section>
+          </div>
+
+          <section class="band" data-band>
+            <header>
+              <h3>In this band</h3>
+              <p data-band-count></p>
+            </header>
+            <div class="grid" data-band-cards></div>
+          </section>
+          <p class="hint" data-status>Loading scores…</p>
+        </section>
+      {% else %}
+        <section class="panel">
+          <h2>Uncertain hold</h2>
+          <p>This job has no confidence report. Pick another job above, or run one. A report does not change the frozen cutoff.</p>
+          {% if page.confidence and page.confidence.sweep %}
             <div class="sweep">
               <table>
                 <thead>
@@ -186,6 +245,40 @@
               </table>
             </div>
           {% endif %}
+          {% if run and (run.mistakes or run.held) %}
+            {% if run.mistakes %}
+              <h3>Errors</h3>
+              <div class="grid">
+                {% for row in run.mistakes %}
+                  <article class="frame">
+                    {% if row.image_rel %}
+                      <a href="{{ url_for('files', rel=row.image_rel) }}">
+                        <img src="{{ url_for('files', rel=row.image_rel) }}" alt="{{ row.path }}" loading="lazy">
+                      </a>
+                    {% endif %}
+                    <p>true {{ row.true }} → {{ row.predicted }} {{ row.score }}{% if row.resin != 'unknown' %} · {{ row.resin }}{% endif %}</p>
+                    <p class="path">{{ row.path }}</p>
+                  </article>
+                {% endfor %}
+              </div>
+            {% endif %}
+            {% if run.held %}
+              <h3>Held</h3>
+              <div class="grid">
+                {% for row in run.held %}
+                  <article class="frame">
+                    {% if row.image_rel %}
+                      <a href="{{ url_for('files', rel=row.image_rel) }}">
+                        <img src="{{ url_for('files', rel=row.image_rel) }}" alt="{{ row.path }}" loading="lazy">
+                      </a>
+                    {% endif %}
+                    <p>true {{ row.true }} · argmax {{ row.predicted }} {{ row.score }}{% if row.resin != 'unknown' %} · {{ row.resin }}{% endif %}</p>
+                    <p class="path">{{ row.path }}</p>
+                  </article>
+                {% endfor %}
+              </div>
+            {% endif %}
+          {% endif %}
           <div class="buttons">
             <form method="post" action="{{ url_for('start_job') }}">
               <input type="hidden" name="kind" value="confidence">
@@ -193,24 +286,231 @@
               <input type="hidden" name="data_dir" value="data_belt_stage1">
               <button>New confidence report</button>
             </form>
-            {% if page.confidence.folder and page.confidence.has_test_record %}
-              <form
-                method="post"
-                action="{{ url_for('start_job') }}"
-                data-confirm="This scores the locked test split again. Continue?"
-              >
-                <input type="hidden" name="kind" value="confidence">
-                <input type="hidden" name="rerun" value="yes">
-                <input type="hidden" name="out" value="{{ page.confidence.folder.rel }}">
-                <input type="hidden" name="model" value="{{ model.rel }}">
-                <input type="hidden" name="data_dir" value="data_belt_stage1">
-                <button>Rescore test</button>
-              </form>
-            {% endif %}
           </div>
-          <p class="hint">A new report scores the locked test split once, into a fresh folder. Rescore is the only button that passes <code>--rerun-test</code>.</p>
         </section>
       {% endif %}
     </div>
+  {% endif %}
+
+  <div data-panel="overview" {% if default_tab != 'overview' %}hidden{% endif %}>
+    <section class="panel">
+      <p><code>{{ model.rel }}</code></p>
+      {% if model.aliases %}
+        <p class="aliases">Also
+          {% for name in model.aliases %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+        </p>
+      {% endif %}
+      {% if model.frozen %}
+        <p>Uncertain is a hold: the winning score is under {{ model.threshold }}. It is not a third class. <a href="{{ url_for('jetson_page') }}">Jetson</a> is how this checkpoint becomes the engine on the belt.</p>
+      {% else %}
+        <p class="hint">This checkpoint has no frozen hold. A blank threshold on Run leaves every frame on its winning class.</p>
+      {% endif %}
+      {% if model.metrics.error %}
+        <p class="hint">{{ model.metrics.error }}</p>
+      {% endif %}
+    </section>
+
+    {% if composition.present %}
+      <section class="panel" id="dataset">
+        <div class="section-head">
+          <h2>{{ composition.name }}</h2>
+          <form method="get" class="picker">
+            <label>
+              Dataset
+              <select name="data" onchange="this.form.submit()">
+                {% for name in data_roots %}
+                  <option {% if name == default_data %}selected{% endif %}>{{ name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            {% if page.selected %}
+              <input type="hidden" name="run" value="{{ page.selected.rel }}">
+            {% endif %}
+            {% if page.confidence_choice %}
+              <input type="hidden" name="confidence" value="{{ page.confidence_choice }}">
+            {% endif %}
+          </form>
+        </div>
+        {% with row=composition %}{% include "_composition.html" %}{% endwith %}
+      </section>
+    {% endif %}
+
+    <section
+      class="panel"
+      id="photos"
+      data-photos
+      data-endpoint="{{ url_for('dataset_images', name=default_data) }}"
+    >
+      <h2>Photos</h2>
+      <p class="hint">Search a filename, or click a plot below. A plot opens the dataset photo when the name identifies one file, and otherwise lists every match.</p>
+      <div class="filters">
+        <label>
+          Filename
+          <input type="search" data-photo-query placeholder="capture id, resin, date">
+        </label>
+        <label>
+          Split
+          <select data-photo-split>
+            <option value="">Any</option>
+            <option value="train">Train</option>
+            <option value="validation">Validation</option>
+            <option value="test">Test</option>
+          </select>
+        </label>
+        <label>
+          Class
+          <select data-photo-class>
+            <option value="">Any</option>
+            <option value="metal">Metal</option>
+            <option value="plastic">Plastic</option>
+          </select>
+        </label>
+        <label>
+          Resin
+          <select data-photo-resin>
+            <option value="">Any</option>
+            <option value="PET">PET</option>
+            <option value="HDPE">HDPE</option>
+            <option value="PP">PP</option>
+            <option value="OTHERS">OTHERS</option>
+            <option value="none">No tag</option>
+          </select>
+        </label>
+        {% if composition.present and composition.origins %}
+          <label>
+            Source
+            <select data-photo-origin>
+              <option value="">Any</option>
+              {% for item in composition.origins %}
+                <option value="{{ item.key }}">{{ item.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        {% endif %}
+      </div>
+      <p class="hint" data-photo-count>Type part of a filename, or set a filter.</p>
+      <div class="grid" data-photo-grid></div>
+    </section>
+
+    {% set analysis_hash = 'overview' %}
+    {% include "_analysis.html" %}
+  </div>
+
+  <dialog class="viewer" data-viewer>
+      <div class="section-head">
+        <h2 data-viewer-title>Photo</h2>
+        <button type="button" class="ghost" data-viewer-close>Close</button>
+      </div>
+      <div class="viewer-layout">
+        <figure data-viewer-plot hidden>
+          <img alt="Analysis plot">
+          <figcaption>Analysis</figcaption>
+        </figure>
+        <figure data-viewer-photo hidden>
+          <img alt="">
+          <figcaption data-viewer-meta></figcaption>
+        </figure>
+      </div>
+      <p class="hint" data-viewer-note></p>
+      <div class="grid" data-viewer-hits></div>
+    </dialog>
+
+  <div data-panel="run" hidden>
+    <section class="panel">
+      <h2>Run</h2>
+      {% if page.runs|length > 1 %}
+        <form method="get" action="#run" class="picker">
+          <label>
+            Saved run
+            <select name="run" onchange="this.form.submit()">
+              {% for item in page.runs %}
+                <option value="{{ item.rel }}" {% if page.selected and page.selected.rel == item.rel %}selected{% endif %}>{{ item.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </form>
+      {% endif %}
+      {% if page.selected %}
+        <div class="buttons">
+          <form method="post" action="{{ url_for('reveal') }}">
+            <input type="hidden" name="path" value="{{ page.selected.rel }}">
+            <button class="ghost">Show in folder</button>
+          </form>
+          <form method="post" action="{{ url_for('zip_folder') }}">
+            <input type="hidden" name="path" value="{{ page.selected.rel }}">
+            <button class="ghost">Zip this run</button>
+          </form>
+        </div>
+      {% endif %}
+      {% if model.frozen %}
+        <form method="post" action="{{ url_for('reveal') }}" class="inline-form">
+          <input type="hidden" name="path" value="docs/belt_stage1_model_report.md">
+          <button class="ghost">Show the written record</button>
+        </form>
+      {% endif %}
+      <form method="post" action="{{ url_for('start_job') }}" class="form-grid">
+        <input type="hidden" name="model" value="{{ model.rel }}">
+        <label>
+          Dataset
+          <select name="data_dir">
+            {% for name in data_roots %}
+              <option {% if name == default_data %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Image paths, optional
+          <input name="images" placeholder="folder or file, space separated">
+        </label>
+        <label class="check span-2">
+          <input type="checkbox" name="both_splits">
+          Score validation and test
+        </label>
+        <fieldset class="span-2">
+          <legend>Analytics steps</legend>
+          {% for step in steps %}
+            <label class="check"><input type="checkbox" name="steps" value="{{ step }}" checked> {{ step }}</label>
+          {% endfor %}
+        </fieldset>
+        <label class="span-2">
+          Threshold override
+          <input name="threshold" inputmode="decimal" placeholder="blank keeps the frozen hold">
+        </label>
+        <div class="span-2 buttons">
+          <button name="kind" value="eval">Run eval</button>
+          <button name="kind" value="analyze">Run full analytics</button>
+          <button name="kind" value="mistakes">Mistakes only</button>
+        </div>
+      </form>
+      <p class="hint">Eval and analytics write under <code>analysis/{{ model.stem }}/</code>. A blank threshold keeps the belt stage 1 hold.</p>
+      {% if page.show_uncertain %}
+        <div class="buttons">
+          <form method="post" action="{{ url_for('start_job') }}">
+            <input type="hidden" name="kind" value="confidence">
+            <input type="hidden" name="model" value="{{ model.rel }}">
+            <input type="hidden" name="data_dir" value="data_belt_stage1">
+            <button>New confidence report</button>
+          </form>
+          {% if page.confidence and page.confidence.folder and page.confidence.has_test_record %}
+            <form
+              method="post"
+              action="{{ url_for('start_job') }}"
+              data-confirm="This scores the locked test split again. Continue?"
+            >
+              <input type="hidden" name="kind" value="confidence">
+              <input type="hidden" name="rerun" value="yes">
+              <input type="hidden" name="out" value="{{ page.confidence.folder.rel }}">
+              <input type="hidden" name="model" value="{{ model.rel }}">
+              <input type="hidden" name="data_dir" value="data_belt_stage1">
+              <button>Rescore test</button>
+            </form>
+          {% endif %}
+        </div>
+      {% endif %}
+      {% if page.eval_log %}
+        <h3>{{ page.eval_log.name }}</h3>
+        <pre class="report">{{ page.eval_log.text }}</pre>
+      {% endif %}
+    </section>
   </div>
 {% endblock %}

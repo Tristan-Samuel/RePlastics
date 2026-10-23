@@ -1,6 +1,8 @@
 """Build argv lists for the existing scripts. No shell."""
 
+import os
 import shlex
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -34,11 +36,15 @@ class Prepared:
         self.record = record
 
 
+def _is_bash(arg):
+    return Path(arg).name.lower() in {"bash", "bash.exe"}
+
+
 def display_argv(argv):
     args = list(argv)
     if (
         args
-        and args[0] == "bash"
+        and _is_bash(args[0])
         and len(args) > 1
         and args[1].endswith("colab_train.sh")
     ):
@@ -241,13 +247,14 @@ def _prepare_train(form, require_confirm):
             "--data-dir",
             data_dir,
         ]
-        return Prepared(argv, "Train on this Mac", display_argv(argv), False, "")
+        return Prepared(argv, "Train on this computer", display_argv(argv), False, "")
     if where != "colab":
-        raise CommandError("Pick the T4 or this Mac.")
+        raise CommandError("Pick the T4 or this computer.")
+    _require_t4()
     gpu = (form.get("gpu") or "T4").strip()
     if gpu not in GPUS:
         raise CommandError("GPU has to be T4, L4, or A100.")
-    argv = ["bash", str(ROOT / "colab_train.sh"), "--gpu", gpu]
+    argv = [_real_bash(), str(ROOT / "colab_train.sh"), "--gpu", gpu]
     if _flag(form, "keep"):
         argv.append("--keep")
     if _flag(form, "drive"):
@@ -403,7 +410,7 @@ def _prepare_belt_zip(form, require_confirm):
     argv = [_python(), "build_belt_stage1.py"]
     message = (
         "This rebuilds data_belt_stage1 and "
-        "~/Downloads/belt_stage1_224.zip. Continue?"
+        "belt_stage1_224.zip in Downloads. Continue?"
     )
     if require_confirm:
         _confirmed(form, True)
@@ -411,11 +418,51 @@ def _prepare_belt_zip(form, require_confirm):
 
 
 def _prepare_stop(form, require_confirm):
+    if shutil.which("colab") is None:
+        raise CommandError(
+            "The colab command is not installed, so there is no T4 session to stop."
+        )
     argv = ["colab", "stop", "-s", SESSION]
     message = "Stop the Colab session named trainer?"
     if require_confirm:
         _confirmed(form, True)
     return Prepared(argv, "Stop T4", display_argv(argv), True, message)
+
+
+def _real_bash():
+    """A shell that can run colab_train.sh. Skip the Windows Store stub."""
+    if os.name == "nt":
+        candidates = []
+        found = shutil.which("bash")
+        if found:
+            candidates.append(found)
+        candidates.extend(
+            [
+                r"C:\Program Files\Git\bin\bash.exe",
+                r"C:\Program Files\Git\usr\bin\bash.exe",
+            ]
+        )
+        for candidate in candidates:
+            path = Path(candidate)
+            if path.parent.name.lower() == "system32":
+                continue
+            if path.is_file():
+                return str(path)
+        return None
+    return shutil.which("bash")
+
+
+def _require_t4():
+    if _real_bash() is None:
+        raise CommandError(
+            "T4 training needs bash. This machine does not have it, "
+            "so train on this computer instead."
+        )
+    if shutil.which("colab") is None:
+        raise CommandError(
+            "T4 training needs the colab command, which is not installed. "
+            "Train on this computer instead."
+        )
 
 
 def _python():

@@ -52,13 +52,23 @@ The rest of that run is in [`analysis/belt-stage1/`](analysis/belt-stage1/):
 
 ## Setup
 
+macOS or Linux:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-CUDA, Apple Silicon (MPS), or CPU is chosen automatically.
+Windows, from the repo folder:
+
+```bat
+py -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+CUDA, Apple Silicon (MPS), or CPU is chosen automatically. Photos and `.pt` files are not in git. They stay on the machine that trained them.
 
 ## Train
 

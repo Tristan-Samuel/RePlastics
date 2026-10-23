@@ -1,0 +1,36 @@
+<section class="panel" id="analysis">
+  <div class="section-head">
+    <h2>Analysis</h2>
+    {% if page.runs|length > 1 %}
+      <form method="get" action="#{{ analysis_hash }}" class="picker">
+        <label>
+          Saved run
+          <select name="run" onchange="this.form.submit()">
+            {% for item in page.runs %}
+              <option value="{{ item.rel }}" {% if page.selected and page.selected.rel == item.rel %}selected{% endif %}>{{ item.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <input type="hidden" name="data" value="{{ default_data }}">
+        {% if page.confidence_choice %}
+          <input type="hidden" name="confidence" value="{{ page.confidence_choice }}">
+        {% endif %}
+      </form>
+    {% elif page.selected %}
+      <p class="meta">{{ page.selected.rel }}</p>
+    {% endif %}
+  </div>
+  {% include "_inspect.html" %}
+</section>
+
+{% if run and run.scoring_html %}
+  <div class="prose panel">{{ run.scoring_html }}</div>
+{% endif %}
+{% if run and run.reports %}
+  {% for report in run.reports %}
+    <details>
+      <summary>{{ report.name }}</summary>
+      <div class="prose">{{ report.html }}</div>
+    </details>
+  {% endfor %}
+{% endif %}

@@ -1,50 +1,47 @@
 {% extends "base.html" %}
-{% from "_macros.html" import pct %}
+{% from "_macros.html" import metric %}
 {% block title %}Models{% endblock %}
 {% block body %}
   <div class="page-head">
     <h1>Models</h1>
-    <p>Each card is one checkpoint file. Names in <code>models/named</code> are aliases, not extra copies.</p>
+    <p>One row per checkpoint. Names in <code>models/named</code> are aliases.</p>
   </div>
   {% if models %}
-    <div class="card-grid">
+    <ul class="model-list">
       {% for model in models %}
-        <a class="model-card" href="{{ url_for('model_page', stem=model.stem) }}">
-          <h2>{{ model.stem }}</h2>
+        <li>
+          <a href="{{ url_for('model_page', stem=model.stem) }}" title="{{ model.stem }}">{{ model.stem|replace('_', '_​') }}</a>
+          <p class="meta">{{ model.mtime_label }} · {{ model.size_label }}{% if model.frozen %} · hold &lt; {{ model.threshold }}{% endif %}</p>
+          <p class="scores">
+            {{ metric("Validation", model.metrics.validation) }}
+            {{ metric("Balanced", model.metrics.balanced) }}
+            {{ metric("Test", model.metrics.test) }}
+          </p>
           {% if model.aliases %}
-            <p class="aliases">Also called
-              {% for name in model.aliases %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+            <p class="aliases">
+              {% for name in model.aliases %}<code>{{ name|replace('_', '_​') }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
             </p>
           {% endif %}
-          <p>{{ model.mtime_label }} · {{ model.size_label }}</p>
-          <dl>
-            <div><dt>Validation</dt><dd>{{ pct(model.metrics.validation) }}</dd></div>
-            <div><dt>Balanced</dt><dd>{{ pct(model.metrics.balanced) }}</dd></div>
-            <div><dt>Test</dt><dd>{{ pct(model.metrics.test) }}</dd></div>
-          </dl>
-          {% if model.frozen %}
-            <p class="hold">Hold: winning score below {{ model.threshold }} is uncertain.</p>
-          {% endif %}
           {% if model.metrics.error %}
-            <p>{{ model.metrics.error }}</p>
+            <p class="hint">{{ model.metrics.error }}</p>
           {% endif %}
-        </a>
+        </li>
       {% endfor %}
-    </div>
+    </ul>
   {% else %}
-    <p>No checkpoints in <code>models/</code>.</p>
+    <p>No checkpoints in <code>models/</code>. The weights stay on the machine that trained them.{% if others %} The figures from a saved run are listed below.{% endif %}</p>
   {% endif %}
 
-  <section>
-    <h2>Other saved analyses</h2>
-    {% if others %}
+  {% if others %}
+    <section>
+      <h2>Saved analyses</h2>
       <ul class="link-list">
         {% for item in others %}
           <li><a href="{{ url_for('saved_page', slug=item.slug) }}">{{ item.label }}</a></li>
         {% endfor %}
       </ul>
-    {% else %}
-      <p>None of the older analysis folders are on disk.</p>
-    {% endif %}
-  </section>
+    </section>
+  {% elif not models %}
+    <p class="hint">No saved analysis is on disk.</p>
+  {% endif %}
 {% endblock %}

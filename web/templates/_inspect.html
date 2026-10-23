@@ -1,0 +1,102 @@
+{% from "_macros.html" import figure %}
+{% if not run %}
+  <p class="hint">No saved analysis for this checkpoint yet.</p>
+{% else %}
+  {% set has_cam = run.errors or run.correct %}
+  {% set has_plots = has_cam or run.maps or run.filters or run.space or run.stats or run.montages %}
+  {% if not has_plots %}
+    <p class="hint">No plots in this run.</p>
+  {% else %}
+    {% if has_cam or run.maps %}
+      <div class="filters" data-filters>
+        <label>
+          Class
+          <select data-filter-class>
+            <option value="any">Any</option>
+            <option value="metal">Metal</option>
+            <option value="plastic">Plastic</option>
+          </select>
+        </label>
+        <label>
+          Resin
+          <select data-filter-resin>
+            <option value="any">Any</option>
+            <option value="PET">PET</option>
+            <option value="HDPE">HDPE</option>
+            <option value="PP">PP</option>
+            <option value="OTHERS">OTHERS</option>
+            <option value="unknown">No resin tag</option>
+          </select>
+        </label>
+      </div>
+    {% endif %}
+
+    {% if run.errors %}
+      <section>
+        <h2>Grad-CAM, wrong</h2>
+        <div class="grid">
+          {% for card in run.errors %}{{ figure(card) }}{% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if run.correct %}
+      <section>
+        <h2>Grad-CAM, correct</h2>
+        <div class="grid">
+          {% for card in run.correct %}{{ figure(card) }}{% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if run.montages %}
+      <section>
+        <h2>Mistake montage</h2>
+        <div class="grid wide">
+          {% for card in run.montages %}{{ figure(card) }}{% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if run.maps %}
+      <section>
+        <h2>Feature maps</h2>
+        {% for group in run.maps %}
+          <article class="map-group" data-true="{{ group.true }}" data-resin="{{ group.resin }}">
+            <h3>{{ group.label }}</h3>
+            <div class="grid">
+              {% for card in group.layers %}{{ figure(card) }}{% endfor %}
+            </div>
+          </article>
+        {% endfor %}
+      </section>
+    {% endif %}
+
+    {% if run.filters %}
+      <section>
+        <h2>Filters</h2>
+        <div class="grid wide">
+          {% for card in run.filters %}{{ figure(card) }}{% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if run.space %}
+      <section>
+        <h2>Feature space</h2>
+        <div class="grid wide">
+          {% for card in run.space %}{{ figure(card) }}{% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if run.stats %}
+      <section>
+        <h2>Layer stats</h2>
+        <div class="grid wide">
+          {% for card in run.stats %}{{ figure(card) }}{% endfor %}
+        </div>
+      </section>
+    {% endif %}
+  {% endif %}
+{% endif %}

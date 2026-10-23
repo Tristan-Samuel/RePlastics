@@ -8,11 +8,28 @@
   {%- endif -%}
 {% endmacro %}
 
+{% macro metric(label, value) %}
+  <span class="score"><span class="k">{{ label }}</span> {{ pct(value) }}</span>
+{% endmacro %}
+
 {% macro figure(card) %}
-  <figure class="shot" {% if card.true is defined %}data-true="{{ card.true }}" data-resin="{{ card.resin or 'unknown' }}"{% endif %}>
+  <figure
+    class="shot"
+    {% if card.true is defined %}data-true="{{ card.true }}" data-resin="{{ card.resin or 'unknown' }}"{% endif %}
+    {% if card.query is defined and card.query %}data-query="{{ card.query }}"{% endif %}
+    {% if card.source_rel is defined and card.source_rel %}data-source="{{ card.source_rel }}" data-source-name="{{ card.source_name }}" data-source-split="{{ card.source_split }}" data-source-class="{{ card.source_class }}" data-source-resin="{{ card.source_resin }}" data-source-origin="{{ card.source_origin }}"{% endif %}
+    data-plot="{{ card.rel }}"
+  >
     <a href="{{ url_for('files', rel=card.rel) }}">
       <img src="{{ url_for('files', rel=card.rel) }}" alt="{{ card.label }}">
     </a>
-    <figcaption>{{ card.caption if card.caption is defined else card.label }}</figcaption>
+    <figcaption>
+      {{ card.caption if card.caption is defined else card.label }}
+      {% if card.source_rel is defined and card.source_rel %}
+        <span class="hint">Opens the photo</span>
+      {% elif card.query is defined and card.query %}
+        <span class="hint">Looks up {{ card.query }}</span>
+      {% endif %}
+    </figcaption>
   </figure>
 {% endmacro %}
