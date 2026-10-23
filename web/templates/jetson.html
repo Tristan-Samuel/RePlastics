@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Jetson{% endblock %}
+{% block body %}
+  <div class="page-head">
+    <h1>Jetson</h1>
+    <p>The belt computer runs a TensorRT engine. This machine exports the checkpoint to ONNX. The Jetson builds the engine from that file.</p>
+  </div>
+
+  <section class="panel">
+    <p class="file-flow">
+      <span class="chip">.pt · this machine</span>
+      <span aria-hidden="true">→</span>
+      <span class="chip">.onnx · copied</span>
+      <span aria-hidden="true">→</span>
+      <span class="chip">.engine · Jetson</span>
+    </p>
+    <p>The <code>.pt</code> is a PyTorch dictionary: ResNeXt-50 weights, plus which output is metal and which is plastic. It stays here. <code>export_onnx.py</code> reads those weights and writes the network by itself, one normalized {{ input_size }}×{{ input_size }} image in and two logits out.</p>
+    <p>Copy the <code>.onnx</code> and the JSON beside it. Build the engine on the Jetson that will run it. An engine is tied to that GPU and that JetPack, so a file built on another machine stays there.</p>
+    {% if onnx_ready and json_ready %}
+      <p class="hint">Both files are in <code>models/</code> on this machine, from <code>{{ checkpoint }}</code>.</p>
+    {% else %}
+      <p class="hint">The export is not in <code>models/</code> yet. The command below writes it.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>What the network returns</h2>
+    <p>Input name <code>image</code>, float32, shape <code>1×3×{{ input_size }}×{{ input_size }}</code>, NCHW, already ImageNet-normalized. Mean {{ mean|join(', ') }}. Std {{ std|join(', ') }}.</p>
+    <p>Output name <code>logits</code>, shape <code>1×2</code>. {% for name, index in class_order %}Index {{ index }} is {{ name }}{% if not loop.last %}. {% endif %}{% endfor %}.</p>
+    <p>Softmax, temperature, and the hold stay outside the graph. The score is the softmax of <code>logits / {{ '%.6f'|format(temperature) }}</code>. When the winner is under {{ '%.2f'|format(threshold) }}, the label is uncertain. A new hold rewrites the JSON. It leaves the ONNX file as it is.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Why the hold is {{ '%.2f'|format(threshold) }}</h2>
+    <p>The measurement on validation picked 0.97. That cutoff held 39 of 1,251 frames to catch four of the five mistakes. One HDPE bottle at 99% still went through.</p>
+    <p>This checkpoint is a public showcase, so a couple of confident mistakes are better than parking that many frames. At {{ '%.2f'|format(threshold) }}, validation holds 14 frames. The misses at 76% and 85% stay held. The ones at 91%, 96%, and 99% are sorted. On the locked 300-image test, 4 frames stay unsorted and the other 296 are correct. The crushed can at 69% is one of the four. The test folder is larger now. On that set the same cutoff holds 6 frames and still sorts 6 confident mistakes.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Export</h2>
+    <pre class="command">pip install onnx onnxruntime
+python export_onnx.py --check --data-dir data_belt_stage1</pre>
+    <p>That writes <code>models/resnext50_metal_plastic.onnx</code> and <code>models/resnext50_metal_plastic.onnx.json</code>. <code>--check</code> scores two metal and two plastic test photos with PyTorch and with ONNX Runtime. It stops if a logit moves by more than 0.0001.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Each frame</h2>
+    <ol class="steps">
+      <li>Open the JPEG as RGB, including the phone EXIF rotation.</li>
+      <li>Bilinear resize to {{ input_size }}×{{ input_size }}. Pillow matches training. OpenCV <code>INTER_LINEAR</code> lands on different pixels, so a belt app that uses it should re-score frames near {{ '%.2f'|format(threshold) }} before trusting the hold. OpenCV reads BGR. Swap to RGB before the resize.</li>
+      <li>Divide by 255, subtract the mean, divide by the std.</li>
+      <li>Send that tensor under the input name <code>image</code>.</li>
+      <li>Read <code>logits</code>. Use the JSON class index.</li>
+      <li>Softmax of the logits divided by the JSON temperature.</li>
+      <li>The winning score under the JSON threshold is uncertain. Otherwise the label is the winning class.</li>
+    </ol>
+  </section>
+
+  <section class="panel">
+    <h2>Build the engine</h2>
+    <pre class="command">/usr/src/tensorrt/bin/trtexec \
+  --onnx=resnext50_metal_plastic.onnx \
+  --saveEngine=/opt/replastics/resnext50_metal_plastic.engine \
+  --fp16</pre>
+    <p>The camera process opens that engine once and keeps it. FP16 is the runtime. This network at {{ input_size }} is small on an Orin. Rebuild the engine after a JetPack upgrade, and again after a new export.</p>
+  </section>
+{% endblock %}

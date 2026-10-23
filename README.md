@@ -2,7 +2,7 @@
 
 ResNeXt-50 (32×4d) labels one belt photo **metal**, **plastic**, or **uncertain**.
 
-The current checkpoint is a Colab T4 fine-tune from 5 October 2026: `models/resnext50_metal_plastic_belt_stage1_layer4.pt`. That file stays on the training machine. **Metal** is the reject bucket (belt cans and stage 1 `OTHERS`). **Plastic** is PET, HDPE, and PP. **Uncertain** means hold the frame: the winning score has to clear 0.97.
+The current checkpoint is a Colab T4 fine-tune from 5 October 2026: `models/resnext50_metal_plastic_belt_stage1_layer4.pt`. That file stays on the training machine. **Metal** is the reject bucket (belt cans and stage 1 `OTHERS`). **Plastic** is PET, HDPE, and PP. **Uncertain** means hold the frame: the winning score has to clear 0.85.
 
 ## Test result
 
@@ -14,7 +14,7 @@ The locked test split is 300 images, scored once after validation picked the epo
 | Correct | 149 | 150 | 299 |
 | Recall | 99.33% | 100% | 99.67% |
 
-The miss is a crushed can from 29 September 2026, called plastic at 69%. With the 0.97 hold, 15 of 300 frames stay unsorted and the other 285 are all correct.
+The miss is a crushed can from 29 September 2026, called plastic at 69%. The showcase hold is 0.85. On those same test logits, 4 of 300 frames stay unsorted and the other 296 are all correct.
 
 Validation, used only to pick the epoch, was 1,246/1,251 (99.60% accuracy, 99.11% balanced).
 
@@ -110,7 +110,7 @@ pip install onnx onnxruntime
 python export_onnx.py --check --data-dir data_belt_stage1
 ```
 
-That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_plastic.onnx.json`. The graph is two logits. The camera process still does the 224 resize, ImageNet normalize, and the 0.97 hold. Copy both files to the Jetson and build the engine there: [docs/jetson.md](docs/jetson.md).
+That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_plastic.onnx.json`. The graph is two logits. The camera process still does the 224 resize, ImageNet normalize, and the 0.85 hold. Copy both files to the Jetson and build the engine there: [docs/jetson.md](docs/jetson.md). The lab page is [Jetson](http://127.0.0.1:5050/jetson).
 
 ## Lab
 
@@ -118,19 +118,19 @@ That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_pl
 python -m web
 ```
 
-Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port.
+Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide switches which analysis job's confidence scores are shown. Jetson is the export and the engine build.
 
 ## Belt stage 1 counts
 
-10,806 images at 224×224. Train, validation, and test share neither filename nor bytes.
+11,274 images at 224×224. Train, validation, and test share neither filename nor bytes.
 
 | Split | Stage 1 metal | Belt metal | Stage 1 plastic | Belt plastic | Total |
 |---|---:|---:|---:|---:|---:|
 | Train | 680 | 680 | 3,949 | 3,946 | 9,255 |
 | Validation | 40 | 93 | 406 | 712 | 1,251 |
-| Test | 40 | 110 | 60 | 90 | 300 |
+| Test | 484 | 134 | 60 | 90 | 768 |
 
-The test split is balanced on purpose: 150 metal, 150 plastic.
+Train and validation are unchanged. Test now also holds 444 real stage 1 NonPlastic photos and the 24 boundary frames from 28–30 September. The 180 cans from 25 September were already in train and validation. The scored result above is still the original balanced test, 150 metal and 150 plastic. Synthetic stage 1 copies are not in the dataset.
 
 ## Weights and logs
 

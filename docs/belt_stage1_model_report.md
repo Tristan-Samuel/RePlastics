@@ -79,7 +79,7 @@ Validation, used only to choose the epoch, was 1,246/1,251 (99.60% accuracy, 99.
 
 ## Uncertain frames
 
-The checkpoint stays two classes. `uncertain` is a hold after the softmax: when the winning score is below 0.97, the frame is not sorted as metal or plastic. It is not a third training class, and it is not the stage 1 `OTHERS` resin folder (those photos were trained as metal). `predict.py` applies this rule when it loads the belt stage 1 checkpoint. `--threshold` overrides the cutoff. Other checkpoints keep the raw softmax unless a threshold is passed.
+The checkpoint stays two classes. `uncertain` is a hold after the softmax: when the winning score is below 0.85, the frame is not sorted as metal or plastic. It is not a third training class, and it is not the stage 1 `OTHERS` resin folder (those photos were trained as metal). `predict.py` applies this rule when it loads the belt stage 1 checkpoint. `--threshold` overrides the cutoff. Other checkpoints keep the raw softmax unless a threshold is passed.
 
 The score is the softmax of the logits divided by 1.011839. That temperature was fit on the 1,251 validation images by minimizing unweighted negative log likelihood. Validation NLL moved from 0.016391 to 0.016389. The probabilities barely change.
 
@@ -106,7 +106,9 @@ Cutoffs where a new validation error is caught. With no hold, balanced validatio
 | **0.97** | **39 (3.12%)** | **4 of 5** | **99.95%** |
 
 
-0.97 is the operating point. The HDPE bottle at 99.06% metal stays above every cutoff that holds at most 5% of validation.
+0.97 is the cutoff that measurement selected. The HDPE bottle at 99.06% metal stays above every cutoff that holds at most 5% of validation.
+
+The live cutoff in `decide.py` is 0.85. This checkpoint is a public showcase, so a few confident mistakes are sorted instead of parking the frame. On the same validation scores, 0.85 holds 14 images (1.12%) and catches 2 of 5 errors. The three that stay sorted are the PP bottle at 90.88% and the HDPE bottles at 96.11% and 99.06%. The same already-scored test logits hold 4 of 300 at 0.85, and the other 296 are correct. The crushed can at 68.96% is one of those four.
 
 The 300-image test split was scored once with those two numbers already fixed. 15 images were held (5.00%). The other 285 were all correct: 142/142 metal and 143/143 plastic. Of the 15 held, 1 was the wrong argmax and 14 were correct. The crushed can `capture_01896_20260929_141207_925981.jpg` is the held error (raw 69.16%, scaled 68.96% plastic).
 

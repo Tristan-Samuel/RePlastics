@@ -25,12 +25,12 @@ The graph is `model.forward` at opset 17, batch 1, input `image` with shape `[1,
 `preprocess.py` and `decide.py` stay outside the graph. A threshold change does not need a new export.
 
 1. Open the JPEG as RGB, including the phone EXIF rotation (`load_rgb`).
-2. Bilinear resize to 224×224. Pillow matches training. OpenCV `INTER_LINEAR` lands on different pixels. If the belt app uses OpenCV, re-score frames whose winning score sits near 0.97 before trusting the hold.
+2. Bilinear resize to 224×224. Pillow matches training. OpenCV `INTER_LINEAR` lands on different pixels. If the belt app uses OpenCV, re-score frames whose winning score sits near 0.85 before trusting the hold.
 3. Divide by 255, subtract mean `(0.485, 0.456, 0.406)`, divide by std `(0.229, 0.224, 0.225)`.
 4. Send NCHW `float32`, shape `[1, 3, 224, 224]`, input name `image`. The channel order is RGB.
 5. Read output `logits`, shape `[1, 2]`. The JSON `class_to_idx` is the order. For this checkpoint, index 0 is metal and index 1 is plastic.
 6. Softmax of `logits / temperature`. The JSON temperature is `1.0118387937545776`.
-7. When the winning score is below the JSON threshold `0.97`, the label is `uncertain`. Otherwise it is the winning class.
+7. When the winning score is below the JSON threshold `0.85`, the label is `uncertain`. Otherwise it is the winning class. The measured fit was 0.97. The live cutoff is 0.85 so a showcase sorts the confident calls.
 
 ## Build the engine on the Jetson
 

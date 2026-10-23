@@ -1,7 +1,7 @@
 """Export the belt ResNeXt checkpoint to a fixed-shape ONNX graph.
 
 The graph is ``model.forward`` only: one ImageNet-normalized 224×224
-image in, two logits out. Resize, temperature, and the 0.97 hold stay
+image in, two logits out. Resize, temperature, and the hold stay
 in the camera process. See docs/jetson.md.
 """
 
