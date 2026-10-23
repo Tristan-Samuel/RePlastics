@@ -71,6 +71,14 @@ def model_by_stem(stem):
     return None
 
 
+def model_by_rel(rel):
+    text = (rel or "").replace("\\", "/").strip()
+    for model in list_models():
+        if model["rel"] == text:
+            return model
+    return None
+
+
 def _folder_label(name):
     text = name.replace("-", " ").replace("_", " ")
     return re.sub(r"(?<=[A-Za-z])(?=\d)", " ", text)
@@ -633,13 +641,96 @@ def load_confidence(brief):
     return payload
 
 
+# Display names. The filename stays what train.py and decide.py already use.
+# expect_balanced is the 5 Oct layer4 score; a different number means this
+# file is no longer that model.
+_KNOWN = {
+    "resnext50_metal_plastic_belt_stage1_layer4.pt": {
+        "title": "5 Oct layer4, current default",
+        "role": (
+            "The belt model. The last residual stage was trained on the "
+            "belt plus stage 1 set. models/resnext50_metal_plastic.pt points here."
+        ),
+        "expect_balanced": 0.9911395214332791,
+    },
+    "resnext50_metal_plastic_belt_stage1_layer4_20261005.pt": {
+        "title": "5 Oct layer4, spare copy",
+        "role": (
+            "A second copy of the 5 Oct weights, kept so a training run "
+            "cannot replace the only good file."
+        ),
+        "expect_balanced": 0.9911395214332791,
+    },
+    "resnext50_metal_plastic_belt_stage1_head_20261023.pt": {
+        "title": "23 Oct head-only rerun",
+        "role": (
+            "The file a Colab run saved over the 5 Oct model. It is the older "
+            "head, scored on the belt set. Training this does not start from "
+            "the 5 Oct layer4 weights."
+        ),
+    },
+    "resnext50_metal_plastic_full_fc_9907.pt": {
+        "title": "September head, older photo set",
+        "role": (
+            "Head-only checkpoint from before the belt photos were mixed in. "
+            "Its 99% score is on that older set. On the belt validation set "
+            "it caught about a third of the metal."
+        ),
+    },
+    "resnext50_metal_plastic_sep25_layer4.pt": {
+        "title": "25 Sep layer4",
+        "role": "Layer4 run from before the stage 1 photos were added.",
+    },
+}
+
+
+def _pct(value):
+    if value is None:
+        return "—"
+    return f"{float(value) * 100:.2f}%"
+
+
+def _fallback_title(filename):
+    stem = filename[:-3] if filename.endswith(".pt") else filename
+    prefix = "resnext50_metal_plastic_"
+    if stem.startswith(prefix):
+        stem = stem[len(prefix):]
+    return stem.replace("_", " ")
+
+
+def _describe(filename, meta):
+    known = _KNOWN.get(filename, {})
+    title = known.get("title") or _fallback_title(filename)
+    role = known.get("role") or "Checkpoint stored on this computer."
+    warning = ""
+    expected = known.get("expect_balanced")
+    balanced = meta.get("balanced")
+    if expected is not None and balanced is not None and abs(balanced - expected) > 0.005:
+        warning = (
+            "The scores in this file do not match the 5 Oct layer4 run "
+            f"(balanced {_pct(expected)}). This is not that model."
+        )
+    return title, role, warning
+
+
 def _model_record(path, alias_names):
     stat = path.stat()
     meta = _checkpoint_meta(path)
     frozen = frozen_rule_applies(path)
+    title, role, warning = _describe(path.name, meta)
+    default = "resnext50_metal_plastic.pt" in alias_names
+    option = (
+        f"{title} · balanced {_pct(meta.get('balanced'))}"
+        f" · test {_pct(meta.get('test'))}"
+    )
     return {
         "stem": path.stem,
         "filename": path.name,
+        "title": title,
+        "role": role,
+        "warning": warning,
+        "option_label": option,
+        "default": default,
         "rel": path.relative_to(ROOT).as_posix(),
         "aliases": alias_names,
         "size": stat.st_size,

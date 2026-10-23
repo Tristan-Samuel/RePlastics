@@ -145,6 +145,63 @@ document.querySelectorAll("form[data-confirm]").forEach((form) => {
   });
 });
 
+function percent(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+function showSelectedModel(form) {
+  const panel = document.querySelector("#model-preview");
+  const catalogNode = document.querySelector("#model-catalog");
+  if (!panel || !catalogNode || !form.elements.model) return;
+  const catalog = JSON.parse(catalogNode.textContent);
+  const model = catalog.find((item) => item.rel === form.elements.model.value);
+  panel.replaceChildren();
+  if (!model) {
+    const missing = document.createElement("p");
+    missing.className = "warn-line";
+    missing.textContent = "That checkpoint is not on this computer.";
+    panel.appendChild(missing);
+    return;
+  }
+  const title = document.createElement("h2");
+  title.textContent = model.title;
+  const file = document.createElement("p");
+  file.className = "filename";
+  file.textContent = model.rel;
+  const meta = document.createElement("p");
+  meta.className = "meta";
+  const bits = [model.mtime_label, model.size_label];
+  if (model.default) bits.push("default");
+  if (model.frozen) bits.push(`hold < ${model.threshold}`);
+  meta.textContent = bits.join(" · ");
+  const scores = document.createElement("p");
+  scores.className = "scores";
+  [
+    ["Validation", model.metrics.validation],
+    ["Balanced", model.metrics.balanced],
+    ["Test", model.metrics.test],
+  ].forEach(([label, value]) => {
+    const score = document.createElement("span");
+    score.className = "score";
+    const key = document.createElement("span");
+    key.className = "k";
+    key.textContent = label;
+    score.append(key, ` ${percent(value)}`);
+    scores.appendChild(score);
+  });
+  const role = document.createElement("p");
+  role.className = "hint";
+  role.textContent = model.role;
+  panel.append(title, file, meta, scores, role);
+  if (model.warning) {
+    const warning = document.createElement("p");
+    warning.className = "warn-line";
+    warning.textContent = model.warning;
+    panel.appendChild(warning);
+  }
+}
+
 const trainForm = document.querySelector("#train-form");
 if (trainForm) {
   const box = document.querySelector("#preview");
@@ -155,6 +212,7 @@ if (trainForm) {
   };
   let timer = null;
   const refresh = () => {
+    showSelectedModel(trainForm);
     fetch("/jobs/preview", { method: "POST", body: new FormData(trainForm) })
       .then((response) => response.json())
       .then((data) => {
@@ -388,35 +446,172 @@ if (decide) {
     });
   }
 
-  function card(frame, showSplit) {
-    const article = document.createElement("article");
-    article.className = "frame";
-    if (frame.image) {
-      const link = document.createElement("a");
-      link.href = fileUrl(frame.image);
-      const img = document.createElement("img");
-      img.loading = "lazy";
-      img.alt = frame.path.split("/").pop();
-      img.src = link.href;
-      link.appendChild(img);
-      article.appendChild(link);
+  const THUMB_SIZES = ["s", "m", "l"];
+  let reviewRows = [];
+  let reviewIndex = 0;
+  let reviewSplit = false;
+
+  function savedThumbs() {
+    try {
+      const value = localStorage.getItem("decide-thumbs");
+      if (THUMB_SIZES.includes(value)) return value;
+    } catch (error) {
+      return "s";
     }
-    const line = document.createElement("p");
-    const bits = [
-      frame.true + " → " + frame.pred,
-      percent(frame.score),
-    ];
+    return "s";
+  }
+
+  function applyThumbs(size) {
+    const next = THUMB_SIZES.includes(size) ? size : "s";
+    decide.dataset.thumbs = next;
+    decide.querySelectorAll("[data-thumb]").forEach((button) => {
+      button.setAttribute(
+        "aria-pressed",
+        button.dataset.thumb === next ? "true" : "false"
+      );
+    });
+    try {
+      localStorage.setItem("decide-thumbs", next);
+    } catch (error) {
+      /* private mode */
+    }
+  }
+
+  applyThumbs(savedThumbs());
+  decide.querySelectorAll("[data-thumb]").forEach((button) => {
+    button.addEventListener("click", () => applyThumbs(button.dataset.thumb));
+  });
+
+  function caption(frame, showSplit) {
+    const bits = [frame.true + " → " + frame.pred, percent(frame.score)];
     if (frame.resin && frame.resin !== "unknown") bits.push(frame.resin);
     if (showSplit) bits.push(frame.split);
-    line.textContent = bits.join(" · ");
+    return bits.join(" · ");
+  }
+
+  function kindFor(frame, threshold) {
+    const wrong = frame.pred !== frame.true;
+    if (frame.score < threshold) return wrong ? "caught" : "held-right";
+    return wrong ? "still" : "ok";
+  }
+
+  function shortCall(frame) {
+    const mark = { metal: "M", plastic: "P" };
+    const left = mark[frame.true] || "?";
+    const right = mark[frame.pred] || "?";
+    return left + "→" + right;
+  }
+
+  function paintReview() {
+    const viewer = document.querySelector("[data-viewer]");
+    const frame = reviewRows[reviewIndex];
+    if (!viewer || !frame) return;
+    const photoFigure = viewer.querySelector("[data-viewer-photo]");
+    const photoImage = photoFigure.querySelector("img");
+    const name = frame.path.split("/").pop();
+    viewer.querySelector("[data-viewer-title]").textContent = name;
+    photoFigure.hidden = false;
+    if (frame.image) {
+      photoImage.src = fileUrl(frame.image);
+      photoImage.alt = name;
+    } else {
+      photoImage.removeAttribute("src");
+      photoImage.alt = "";
+    }
+    viewer.querySelector("[data-viewer-meta]").textContent = caption(
+      frame,
+      reviewSplit
+    );
+    const nav = viewer.querySelector("[data-viewer-nav]");
+    const many = reviewRows.length > 1;
+    nav.hidden = !many;
+    viewer.querySelector("[data-viewer-pos]").textContent =
+      reviewIndex + 1 + " of " + reviewRows.length;
+    viewer.querySelector("[data-viewer-prev]").disabled = reviewIndex === 0;
+    viewer.querySelector("[data-viewer-next]").disabled =
+      reviewIndex === reviewRows.length - 1;
+    viewer.querySelector("[data-viewer-note]").textContent = many
+      ? "Arrow keys move through this group."
+      : "";
+  }
+
+  function openReview(rows, index, showSplit) {
+    const viewer = document.querySelector("[data-viewer]");
+    if (!viewer) return;
+    reviewRows = rows;
+    reviewIndex = index;
+    reviewSplit = showSplit;
+    const plot = viewer.querySelector("[data-viewer-plot]");
+    const hits = viewer.querySelector("[data-viewer-hits]");
+    if (plot) plot.hidden = true;
+    if (hits) hits.replaceChildren();
+    paintReview();
+    if (!viewer.open) viewer.showModal();
+  }
+
+  function stepReview(delta) {
+    const next = reviewIndex + delta;
+    if (next < 0 || next >= reviewRows.length) return;
+    reviewIndex = next;
+    paintReview();
+  }
+
+  const viewer = document.querySelector("[data-viewer]");
+  if (viewer) {
+    viewer.addEventListener("keydown", (event) => {
+      const nav = viewer.querySelector("[data-viewer-nav]");
+      if (!nav || nav.hidden) return;
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        stepReview(1);
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        stepReview(-1);
+      }
+    });
+    viewer
+      .querySelector("[data-viewer-prev]")
+      .addEventListener("click", () => stepReview(-1));
+    viewer
+      .querySelector("[data-viewer-next]")
+      .addEventListener("click", () => stepReview(1));
+  }
+
+  function card(frame, showSplit, kind, onOpen) {
+    const article = document.createElement("button");
+    article.type = "button";
+    article.className = frame.image ? "frame" : "frame no-photo";
+    if (kind && kind !== "ok") article.dataset.kind = kind;
+    const name = frame.path.split("/").pop();
+    const summary = caption(frame, showSplit);
+    article.title = summary + " · " + name;
+    article.setAttribute("aria-label", summary + ", " + name);
+    if (frame.image) {
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.alt = "";
+      img.src = fileUrl(frame.image);
+      article.appendChild(img);
+      const badge = document.createElement("span");
+      badge.className = "thumb-score";
+      const call = document.createElement("span");
+      call.textContent = shortCall(frame);
+      const score = document.createElement("span");
+      score.textContent = percent(frame.score);
+      badge.append(call, score);
+      article.appendChild(badge);
+    }
+    const line = document.createElement("p");
+    line.textContent = summary;
     const path = document.createElement("p");
     path.className = "path";
-    path.textContent = frame.path.split("/").pop();
+    path.textContent = name;
     article.append(line, path);
+    article.addEventListener("click", onOpen);
     return article;
   }
 
-  function fillCards(host, rows, showSplit) {
+  function fillCards(host, rows, showSplit, kindOf) {
     const cards = host.querySelector("[data-bucket-cards], [data-band-cards]");
     cards.replaceChildren();
     if (!rows.length) {
@@ -427,7 +622,12 @@ if (decide) {
       return;
     }
     const fragment = document.createDocumentFragment();
-    rows.forEach((frame) => fragment.appendChild(card(frame, showSplit)));
+    rows.forEach((frame, index) => {
+      const kind = typeof kindOf === "function" ? kindOf(frame) : kindOf;
+      fragment.appendChild(
+        card(frame, showSplit, kind, () => openReview(rows, index, showSplit))
+      );
+    });
     cards.appendChild(fragment);
   }
 
@@ -512,13 +712,13 @@ if (decide) {
         ? "lowest " + shown.length + " of " + band.length.toLocaleString("en-US")
         : band.length.toLocaleString("en-US");
     const bandHost = decide.querySelector("[data-band]");
-    fillCards(bandHost, shown, showSplit);
+    fillCards(bandHost, shown, showSplit, (frame) => kindFor(frame, threshold));
   }
 
   function fillBucket(name, rows, showSplit) {
     const host = decide.querySelector(`[data-bucket="${name}"]`);
     host.querySelector("[data-bucket-count]").textContent = rows.length.toLocaleString("en-US");
-    fillCards(host, rows, showSplit);
+    fillCards(host, rows, showSplit, name);
   }
 
   function draw(rows, threshold, viewMin, viewMax) {
@@ -775,6 +975,8 @@ if (photos && viewer) {
   }
 
   function openViewer() {
+    const nav = viewer.querySelector("[data-viewer-nav]");
+    if (nav) nav.hidden = true;
     if (!viewer.open) viewer.showModal();
   }
 

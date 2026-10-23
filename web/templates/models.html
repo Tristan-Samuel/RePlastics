@@ -4,14 +4,16 @@
 {% block body %}
   <div class="page-head">
     <h1>Models</h1>
-    <p>One row per checkpoint. Names in <code>models/named</code> are aliases.</p>
+    <p>One row per checkpoint. The scores are the ones stored in the file. The default link is <code>models/resnext50_metal_plastic.pt</code>.</p>
   </div>
   {% if models %}
     <ul class="model-list">
       {% for model in models %}
         <li>
-          <a href="{{ url_for('model_page', stem=model.stem) }}" title="{{ model.stem }}">{{ model.stem|replace('_', '_​') }}</a>
-          <p class="meta">{{ model.mtime_label }} · {{ model.size_label }}{% if model.frozen %} · hold &lt; {{ model.threshold }}{% endif %}</p>
+          <a href="{{ url_for('model_page', stem=model.stem) }}" title="{{ model.filename }}">{{ model.title }}</a>
+          <p class="meta"><code>{{ model.filename }}</code> · {{ model.mtime_label }} · {{ model.size_label }}{% if model.default %} · default{% endif %}{% if model.frozen %} · hold &lt; {{ model.threshold }}{% endif %}</p>
+          <p class="hint">{{ model.role }}</p>
+          {% if model.warning %}<p class="warn-line">{{ model.warning }}</p>{% endif %}
           <p class="scores">
             {{ metric("Validation", model.metrics.validation) }}
             {{ metric("Balanced", model.metrics.balanced) }}

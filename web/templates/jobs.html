@@ -3,7 +3,13 @@
 {% block body %}
   <div class="page-head">
     <h1>Jobs</h1>
-    <p>One job at a time. The line under the form is the command that will run.</p>
+    <p>One job at a time. The checkpoint you pick is the one that trains.</p>
+  </div>
+
+  <div class="card explain">
+    <p><strong>Weights</strong> come from the checkpoint on this computer. A T4 job uploads that file. A Google Drive file with the same name is not loaded, and no other model is substituted if the upload is missing.</p>
+    <p><strong>Photos</strong> come from <code>belt_stage1_224.zip</code> on Drive when Use Drive zip is checked. The dataset menu is for a run on this computer, or a T4 run with that box unchecked.</p>
+    <p><strong>fc</strong> trains only the new 2-class layer. <strong>layer4</strong> also trains the last residual stage, which is what the 5 Oct model already did. A finished T4 run is saved as a new file. The one you started from stays, and <code>models/resnext50_metal_plastic.pt</code> keeps pointing at the 5 Oct model.</p>
   </div>
 
   <div class="preset-row">
@@ -42,7 +48,16 @@
     <label>Learning rate <input name="lr" value="{{ defaults.lr }}" inputmode="decimal"></label>
     <label>Backbone learning rate <input name="lr_backbone" value="{{ defaults.lr_backbone }}" inputmode="decimal" placeholder="blank uses lr / 10"></label>
     <label>Weight power <input name="weight_power" value="{{ defaults.weight_power }}" inputmode="decimal"></label>
-    <label class="span-2">Checkpoint <input name="model" value="{{ defaults.model }}"></label>
+    <label class="span-2">
+      Checkpoint on this computer
+      <select name="model" id="model-select">
+        {% for model in models %}
+          <option value="{{ model.rel }}" {% if model.rel == defaults.model %}selected{% endif %}>{{ model.option_label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div id="model-preview" class="span-2 model-preview"></div>
+    <script type="application/json" id="model-catalog">{{ models|tojson }}</script>
     <label class="span-2">
       Dataset for this computer, or for a T4 run that does not use Drive
       <select name="data_dir">

@@ -33,6 +33,7 @@ FROZEN_CHECKPOINT_NAMES = frozenset(
         "resnext50_metal_plastic.pt",
         "belt_stage1_layer4.pt",
         "resnext50_metal_plastic_belt_stage1_layer4.pt",
+        "resnext50_metal_plastic_belt_stage1_layer4_20261005.pt",
     }
 )
 

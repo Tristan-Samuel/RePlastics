@@ -7,6 +7,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from web.catalog import model_by_rel
 from web.paths import DATA_ROOTS, ROOT
 
 UNFREEZE = ("fc", "layer4", "layer3", "all")
@@ -231,7 +232,8 @@ def _train_args(form, model_text):
 
 
 def _trim(number):
-    return format(number, "g")
+    text = format(float(number), ".8f").rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def _confirmed(form, needed):
@@ -287,9 +289,65 @@ def onnx_display(data_dir="data_belt_stage1"):
     )
 
 
+def _pct(value):
+    if value is None:
+        return "—"
+    return f"{float(value) * 100:.2f}%"
+
+
+def _checkpoint_note(model_text, where):
+    model = model_by_rel(model_text)
+    if model is None:
+        return f"Starting file: {model_text}. It has to be a checkpoint on this computer."
+    metrics = model["metrics"]
+    lines = []
+    if model["warning"]:
+        lines.append(model["warning"])
+    lines.append(f"Starting weights: {model['title']} ({model_text}).")
+    lines.append(
+        "Scores stored in that file: "
+        f"validation {_pct(metrics.get('validation'))}, "
+        f"balanced {_pct(metrics.get('balanced'))}, "
+        f"test {_pct(metrics.get('test'))}."
+    )
+    lines.append(model["role"])
+    if where == "colab":
+        lines.append(
+            "Those bytes are uploaded from this computer. "
+            "Drive supplies the photo zip only and is not a source of weights."
+        )
+        lines.append(
+            "The trained file is saved under a new name. This starting file stays."
+        )
+    else:
+        lines.append(
+            "Start copies this file and trains the copy. This starting file stays."
+        )
+    return " ".join(lines)
+
+
+def _copy_for_run(model_text):
+    source = ROOT / model_text
+    if not source.is_file():
+        raise CommandError(f"Checkpoint not found: {model_text}")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = source.with_name(f"{source.stem}_{stamp}{source.suffix}")
+    if dest.exists():
+        raise CommandError(f"Already exists: {dest.name}")
+    try:
+        subprocess.run(["cp", "-c", str(source), str(dest)], check=True)
+    except (OSError, subprocess.CalledProcessError):
+        shutil.copy2(source, dest)
+    return dest.relative_to(ROOT).as_posix()
+
+
 def _prepare_train(form, require_confirm):
     where = (form.get("where") or "local").strip()
-    model_text = _model_path(form.get("model"), must_exist=False)
+    resume = _flag(form, "resume")
+    model_text = _model_path(form.get("model"), must_exist=resume)
+    note = _checkpoint_note(model_text, where) if resume else ""
+    if where == "local" and require_confirm and resume:
+        model_text = _copy_for_run(model_text)
     train_args = _train_args(form, model_text)
     if where == "local":
         data_dir = _data_dir(form.get("data_dir"))
@@ -300,7 +358,13 @@ def _prepare_train(form, require_confirm):
             "--data-dir",
             data_dir,
         ]
-        return Prepared(argv, "Train on this computer", display_argv(argv), False, "")
+        return Prepared(
+            argv,
+            "Train on this computer",
+            display_argv(argv),
+            resume,
+            note,
+        )
     if where != "colab":
         raise CommandError("Pick the T4 or this computer.")
     _require_t4()
@@ -316,10 +380,9 @@ def _prepare_train(form, require_confirm):
         data_dir = _data_dir(form.get("data_dir"))
         argv += ["--data-dir", data_dir]
     argv += train_args
-    message = "This starts a Colab GPU session and runs training. Continue?"
     if require_confirm:
         _confirmed(form, True)
-    return Prepared(argv, "Train on T4", display_argv(argv), True, message)
+    return Prepared(argv, "Train on T4", display_argv(argv), True, note or "This starts a Colab GPU session and runs training. Continue?")
 
 
 def _prepare_eval(form):

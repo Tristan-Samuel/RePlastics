@@ -103,13 +103,13 @@ These scripts do not train. They exist because the photos arrived in different s
 
 A Mac can run `train.py`, but the long runs happened on a Colab T4. The shell script is the entry point; the three Python files are workarounds for Colab CLI bugs.
 
-**`colab_train.sh`** starts a GPU session, uploads the training scripts, mounts Drive, copies the zip onto the VM, runs `train.py`, and downloads the checkpoint. `--keep` leaves the VM up so the photos survive between an `fc` run and a `layer4` run. `--resume` copies the checkpoint **before** unzipping, because Drive’s filesystem often disconnects during a long unpack.
+**`colab_train.sh`** starts a GPU session, uploads the training scripts, uploads the `--model` checkpoint from this computer, mounts Drive, copies the photo zip onto the VM, runs `train.py`, and downloads the trained file under a new name. The file you resumed stays. `--keep` leaves the VM up so the photos survive between runs. Drive is the photo zip only. A Drive file with the same checkpoint name is not loaded, and a missing upload is not replaced with a different model.
 
 **`colab_drivemount.py`** mounts Drive with the headers the official `colab drivemount` command omits. Without them Colab returns an HTML error and training never sees the photos.
 
-**`colab_upload.py`** uploads a large zip in 4 MB pieces. The stock uploader base64-encodes the whole file in one request and dies on a multi-gigabyte payload.
+**`colab_upload.py`** uploads a large file in 4 MB pieces. The stock uploader base64-encodes the whole file in one request and dies on a multi-gigabyte payload. The checkpoint uses the same uploader.
 
-**`colab_copy_checkpoint.py`** copies the saved weights from Drive onto `/content` immediately after mount, before the unzip, for the same disconnect reason.
+**`colab_copy_checkpoint.py`** used to copy weights off Drive and, if the named file was missing, took a different checkpoint. It now refuses. Training does not call it.
 
 **`requirements.txt`** is the Mac environment: PyTorch, torchvision, matplotlib, scikit-learn, Pillow. **`requirements-colab.txt`** is only matplotlib, scikit-learn, and Pillow, because Colab already has PyTorch.
 
@@ -139,4 +139,4 @@ On Colab, the same training is:
   --lr 0.0003 --lr-backbone 0.00003 --weight-power 0.5 --epochs 4
 ```
 
-That script calls `colab_drivemount.py`, then `colab_copy_checkpoint.py`, then `prepare_drive_data.py`, then `train.py`. Afterward, `predict.py` and `decide.py` are what the belt should imitate: full-frame bilinear resize to 224, ImageNet normalize, softmax of logits divided by 1.011839, and a hold when the winning score is under 0.85. `export_onnx.py` writes that network as ONNX, and `docs/jetson.md` is how the Jetson turns it into the engine it loads.
+That script uploads the checkpoint from this computer, calls `colab_drivemount.py`, then `prepare_drive_data.py`, then `train.py`. The trained file comes back under a new name. Afterward, `predict.py` and `decide.py` are what the belt should imitate: full-frame bilinear resize to 224, ImageNet normalize, softmax of logits divided by 1.011839, and a hold when the winning score is under 0.85. `export_onnx.py` writes that network as ONNX, and `docs/jetson.md` is how the Jetson turns it into the engine it loads.

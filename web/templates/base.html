@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Lab{% endblock %} · Metal / plastic</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=13">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=16">
 </head>
 <body
   data-running="{{ 'yes' if job_state.running else 'no' }}"
@@ -24,6 +24,6 @@
     {% block body %}{% endblock %}
   </main>
   {% include "_log.html" %}
-  <script src="{{ url_for('static', filename='app.js') }}?v=11"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=13"></script>
 </body>
 </html>

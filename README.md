@@ -101,8 +101,12 @@ A Colab T4 run, once the photo zip is on Drive:
 
 ```bash
 chmod +x colab_train.sh
-./colab_train.sh --keep --drive --resume --unfreeze fc --epochs 6
+./colab_train.sh --keep --drive --resume --unfreeze layer4 \
+  --lr 0.0003 --lr-backbone 0.00003 --weight-power 0.5 --epochs 4 \
+  --model models/resnext50_metal_plastic_belt_stage1_layer4.pt
 ```
+
+`--drive` is the photo zip. The weights are the `--model` file on this computer, uploaded as-is. The trained checkpoint is saved as a new file. The one you passed stays.
 
 ## Score a photo
 
@@ -128,7 +132,7 @@ That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_pl
 python -m web
 ```
 
-Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide switches which analysis job's confidence scores are shown. Jetson copies the export command, writes the ONNX and JSON, and opens that folder in Finder or Explorer.
+Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Jobs lists every checkpoint with the validation, balanced, and test scores stored in the file, and a T4 run uploads the one you pick. Drive supplies the photo zip only. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide switches which analysis job's confidence scores are shown. Small, Medium, and Large set the photo sheet, and a click opens that photo so the arrow keys can move through the group. Jetson copies the export command, writes the ONNX and JSON, and opens that folder in Finder or Explorer.
 
 ## Belt stage 1 counts
 
@@ -144,6 +148,6 @@ Stage 1 metal is split about evenly: 280 validation, 242 test. With the belt can
 
 ## Weights and logs
 
-A checkpoint is about 88 MB. Three of them live in `models/` on this machine, and `.gitignore` leaves them out. Loading one in PyTorch shows the weights plus three numbers: validation accuracy, balanced validation accuracy, and test accuracy. The file has no per-epoch history.
+A checkpoint is about 88 MB. The files live in `models/` on this machine, and `.gitignore` leaves them out. Loading one in PyTorch shows the weights plus the scores from the run that saved it: validation accuracy, balanced validation accuracy, and test accuracy. The file has no per-epoch history. `models/resnext50_metal_plastic.pt` is the default link, and it points at the 5 Oct layer4 checkpoint.
 
 `train.py` prints each epoch to the terminal. It does not write a log file, and the Colab transcript was not kept. The lab writes a job transcript under `web/job-logs/` when a job runs. Those files are gitignored. The training record is the report linked above.

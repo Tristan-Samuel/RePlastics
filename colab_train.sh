@@ -36,7 +36,8 @@ Helper flags:
   --session NAME     Session name (default: trainer, or $COLAB_SESSION)
   --keep             Leave the VM running after training
   --timeout SECONDS  colab exec timeout (default: 21600)
-  --drive            Mount Google Drive instead of uploading images
+  --drive            Photos come from the Drive zip. Weights still come
+                     from --model on this computer.
   --drive-dir PATH   Folder under MyDrive (default: stage1_binary_v2)
                      Photos come from MyDrive/$COLAB_DATA_ZIP
                      (default: belt_stage1_224.zip)
@@ -156,6 +157,15 @@ if [[ ${#TRAIN_ARGS[@]} -gt 0 ]]; then
     done
 fi
 
+STAMP="$(date +%Y%m%d-%H%M%S)"
+RESULT_NAME="$(basename "${MODEL_PATH%.pt}")_${STAMP}.pt"
+RESULT_PATH="models/${RESULT_NAME}"
+if [[ "$RESUME" -eq 1 ]]; then
+    echo "Starting weights on this computer: $MODEL_PATH"
+    echo "Trained weights will be saved as a new file: $RESULT_PATH"
+    echo "Google Drive is photos only. This run does not load a checkpoint from Drive."
+fi
+
 ensure_colab_cli() {
     if ! command -v colab >/dev/null 2>&1; then
         echo "google-colab-cli is not installed. Installing..."
@@ -185,12 +195,13 @@ BUNDLE="$ROOT/.colab_bundle.zip"
 RUN_FILE="$ROOT/.colab_run.py"
 EXTRACT_FILE="$ROOT/.colab_extract.py"
 PREPARE_FILE="$ROOT/.colab_prepare.py"
-CHECKPOINT_FILE="$ROOT/.colab_checkpoint.py"
+ASSEMBLE_FILE="$ROOT/.colab_assemble_checkpoint.py"
 LAST_EXEC_LOG="$ROOT/.colab_last_exec.log"
-rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE" "$LAST_EXEC_LOG"
+rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$ASSEMBLE_FILE" "$LAST_EXEC_LOG"
 
 if [[ "$USE_DRIVE" -eq 1 ]]; then
-    echo "Packing training scripts only. Images will come from Google Drive ($DRIVE_DIR)."
+    echo "Packing training scripts only. Photos will come from Google Drive ($DRIVE_DIR)."
+    echo "The checkpoint named by --model is uploaded from this computer."
     PACK_DATA=""
     ZIP_RESUME=0
 else
@@ -273,13 +284,14 @@ else
     ARGS_JSON='[]'
 fi
 
-python3 - "$RUN_FILE" "$ARGS_JSON" <<'PY'
+python3 - "$RUN_FILE" "$ARGS_JSON" "$RESULT_NAME" <<'PY'
 from pathlib import Path
 import json
 import sys
 
 run_file = Path(sys.argv[1])
 train_args = json.loads(sys.argv[2])
+result_name = sys.argv[3]
 model_rel = "models/resnext50_metal_plastic.pt"
 if "--model" in train_args:
     model_rel = train_args[train_args.index("--model") + 1]
@@ -299,7 +311,8 @@ run_file.write_text(
     "if drive_root.is_dir():\n"
     "    dest_dir = drive_root / 'metal-plastic-sorting'\n"
     "    dest_dir.mkdir(parents=True, exist_ok=True)\n"
-    "    shutil.copy2(src, dest_dir / src.name)\n"
+    f"    shutil.copy2(src, dest_dir / {json.dumps(result_name)})\n"
+    "    print('Saved a Drive copy of the trained file. The next run does not read it.', flush=True)\n"
     "    for name in (\n"
     "        'confusion_matrix.png',\n"
     "        'misclassified_validation.png',\n"
@@ -341,28 +354,6 @@ prepare_file.write_text(
 )
 print(f"Wrote {prepare_file} for {source} (zip {zip_path})")
 PY
-
-python3 - "$CHECKPOINT_FILE" "$(basename "$MODEL_PATH")" "$ROOT/colab_copy_checkpoint.py" <<'PY'
-from pathlib import Path
-import sys
-
-dest, name, source = sys.argv[1:]
-text = Path(source).read_text(encoding="utf-8")
-text = text.replace(
-    'DEST = Path("/content/models/resnext50_metal_plastic.pt")',
-    f'DEST = Path("/content/models/{name}")',
-    1,
-)
-text = text.replace(
-    "CANDIDATES = [",
-    "CANDIDATES = [\n    Path(\n"
-    f'        "/content/drive/MyDrive/metal-plastic-sorting/{name}"\n'
-    "    ),",
-    1,
-)
-Path(dest).write_text(text, encoding="utf-8")
-PY
-echo "Wrote $CHECKPOINT_FILE"
 
 cat > "$EXTRACT_FILE" <<'PY'
 import zipfile
@@ -427,7 +418,7 @@ print("COLAB_STEP_OK", flush=True)
 PY
 
 cleanup() {
-    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$CHECKPOINT_FILE" "$LAST_EXEC_LOG"
+    rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$ASSEMBLE_FILE" "$LAST_EXEC_LOG"
     if [[ "${KEEP:-0}" -eq 1 ]]; then
         echo "Leaving session $SESSION running (--keep)"
         return
@@ -458,16 +449,17 @@ download_if_present() {
 
 download_checkpoint() {
     mkdir -p models
-    if colab download -s "$SESSION" content/best.pt "$MODEL_PATH"; then
-        echo "Downloaded content/best.pt -> $MODEL_PATH"
+    if [[ -e "$RESULT_PATH" ]]; then
+        echo "Refusing to overwrite $RESULT_PATH" >&2
+        return 1
+    fi
+    if colab download -s "$SESSION" content/best.pt "$RESULT_PATH"; then
+        echo "Trained checkpoint saved to $RESULT_PATH"
+        echo "Left the starting file in place: $MODEL_PATH"
         return 0
     fi
-    if colab download -s "$SESSION" content/resnext50_metal_plastic.pt "$MODEL_PATH"; then
-        echo "Downloaded content/resnext50_metal_plastic.pt -> $MODEL_PATH"
-        return 0
-    fi
-    echo "Failed to download the checkpoint. It is on the VM at /content/models/." >&2
-    echo "Copy it to /content/best.pt and re-run: colab download -s $SESSION content/best.pt $MODEL_PATH" >&2
+    echo "Failed to download the checkpoint. It is on the VM at /content/best.pt." >&2
+    echo "The starting file was not changed: $MODEL_PATH" >&2
     return 1
 }
 
@@ -584,31 +576,64 @@ mount_google_drive() {
     "$COLAB_PY" "$ROOT/colab_drivemount.py" "$SESSION"
 }
 
-stage_checkpoint_on_drive() {
-    local my_drive dest
+upload_local_checkpoint() {
+    local real name expected prefix
     [[ "$RESUME" -eq 1 ]] || return 0
-    [[ -f "$MODEL_PATH" ]] || return 0
+    if [[ ! -f "$MODEL_PATH" ]]; then
+        echo "Cannot resume. This computer has no file at $MODEL_PATH" >&2
+        echo "Drive is not searched, and no other checkpoint is substituted." >&2
+        exit 1
+    fi
+    real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$MODEL_PATH")"
+    name="$(basename "$MODEL_PATH")"
+    expected="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$real")"
+    echo "Uploading this computer's checkpoint. Drive is not a source of weights."
+    echo "  selected: $MODEL_PATH"
+    echo "  bytes:    $real ($expected bytes)"
+    prefix="content/ckpt_${STAMP}.part"
+    python3 "$ROOT/colab_upload.py" "$SESSION" "$real" "$prefix"
+    python3 - "$ASSEMBLE_FILE" "$name" "$STAMP" "$expected" <<'PY'
+from pathlib import Path
+import sys
 
-    for my_drive in "$HOME/Library/CloudStorage"/GoogleDrive-*/"My Drive"; do
-        if [[ -d "$my_drive" ]]; then
-            dest="$my_drive/metal-plastic-sorting/$(basename "$MODEL_PATH")"
-            mkdir -p "$(dirname "$dest")"
-            if [[ -f "$dest" ]]; then
-                echo "Checkpoint already on Google Drive at metal-plastic-sorting/$(basename "$MODEL_PATH")"
-                return 0
-            fi
-            echo "Copying checkpoint to Google Drive (once). Colab will read it from there."
-            cp "$MODEL_PATH" "$dest"
-            return 0
-        fi
-    done
+dest_path, name, stamp, expected = sys.argv[1:]
+expected = int(expected)
+text = f"""from pathlib import Path
+
+name = {name!r}
+stamp = {stamp!r}
+expected = {expected}
+content = Path("/content")
+parts = sorted(content.glob(f"ckpt_{{stamp}}.part.*"))
+if not parts:
+    raise SystemExit("The checkpoint upload left no parts on the VM.")
+dest = content / "models" / name
+dest.parent.mkdir(parents=True, exist_ok=True)
+tmp = dest.with_suffix(".uploading")
+total = 0
+with tmp.open("wb") as out:
+    for part in parts:
+        data = part.read_bytes()
+        out.write(data)
+        total += len(data)
+if total != expected:
+    tmp.unlink(missing_ok=True)
+    raise SystemExit(
+        f"Uploaded checkpoint is {{total}} bytes. This computer's file is {{expected}} bytes."
+    )
+tmp.replace(dest)
+for part in parts:
+    part.unlink()
+print(f"VM checkpoint is this computer's file: {{dest}} ({{total}} bytes)", flush=True)
+print("COLAB_STEP_OK", flush=True)
+"""
+Path(dest_path).write_text(text, encoding="utf-8")
+PY
+    echo "Checking the uploaded checkpoint matches this computer's file"
+    colab_exec 180 "$ASSEMBLE_FILE"
 }
 
 trap cleanup EXIT
-
-if [[ "$USE_DRIVE" -eq 1 && "$RESUME" -eq 1 ]]; then
-    stage_checkpoint_on_drive
-fi
 
 echo "Checking Colab session '$SESSION' on $GPU..."
 echo "First run prints a Google sign-in URL. Open it, then paste the authorization code (not the URL)."
@@ -625,10 +650,7 @@ if [[ "$USE_DRIVE" -eq 1 ]]; then
     ensure_scripts_on_vm
     PHASE=uploaded
     mount_google_drive
-    if [[ "$RESUME" -eq 1 ]]; then
-        echo "Copying checkpoint from Drive onto the VM (before unzip, while FUSE is up)"
-        colab_exec 180 "$CHECKPOINT_FILE"
-    fi
+    upload_local_checkpoint
     echo "Preparing photos on the VM (256px zip if present, else Drive copy)"
     colab_exec 3600 "$PREPARE_FILE"
 elif vm_has 'train.py'; then
@@ -648,6 +670,10 @@ else
     PHASE=uploaded
     echo "Extracting training bundle on the VM"
     colab_exec 120 "$EXTRACT_FILE"
+fi
+
+if [[ "$USE_DRIVE" -eq 0 ]]; then
+    upload_local_checkpoint
 fi
 
 echo "Installing Python packages (Colab already has CUDA PyTorch)"

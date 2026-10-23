@@ -512,6 +512,35 @@ fieldset {
 
 legend { color: var(--muted); padding: 0 0.3rem; }
 
+.explain p { margin: 0.4rem 0; }
+.explain p:first-child { margin-top: 0; }
+.explain p:last-child { margin-bottom: 0; }
+
+.model-preview {
+  border: 1px solid var(--line);
+  background: var(--elev);
+  padding: 0.8rem 0.9rem;
+}
+
+.model-preview h2 {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 600;
+}
+
+.model-preview .filename {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.warn-line {
+  margin: 0.35rem 0 0;
+  color: var(--warn);
+}
+
 .command-preview .label, .label {
   margin: 0;
   color: var(--muted);
@@ -541,10 +570,29 @@ pre, .command {
   margin: 0.5rem 0 1rem;
 }
 
+.size-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.92rem;
+}
+
+.size-field .seg { margin-top: 0.15rem; }
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 0.55rem;
+}
+
+[data-decide][data-thumbs="s"] .grid {
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 0.35rem;
+}
+
+[data-decide][data-thumbs="m"] .grid {
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.4rem;
 }
 
 .grid.wide { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
@@ -566,6 +614,43 @@ pre, .command {
 }
 
 .frame img { aspect-ratio: 1; object-fit: cover; }
+
+button.frame {
+  display: block;
+  width: 100%;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  position: relative;
+}
+
+[data-decide] .frame[data-kind="still"] { box-shadow: inset 3px 0 0 var(--bad); }
+[data-decide] .frame[data-kind="caught"] { box-shadow: inset 3px 0 0 var(--accent); }
+[data-decide] .frame[data-kind="held-right"] { box-shadow: inset 3px 0 0 var(--warn); }
+
+.thumb-score { display: none; }
+
+[data-decide][data-thumbs="s"] .frame:not(.no-photo) p { display: none; }
+
+[data-decide][data-thumbs="s"] .thumb-score {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.2rem;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.1rem 0.28rem;
+  background: rgba(5, 7, 10, 0.82);
+  color: #fff;
+  font-size: 0.65rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+[data-decide][data-thumbs="m"] .frame .path { display: none; }
+[data-decide][data-thumbs="m"] .frame p { margin: 0.25rem 0.35rem; }
 
 .shot figcaption, .shot p, .frame p { margin: 0.35rem 0.5rem; }
 
@@ -690,6 +775,42 @@ dialog.viewer {
 
 dialog.viewer::backdrop { background: rgba(0, 0, 0, 0.72); }
 
+dialog.viewer .section-head {
+  flex-wrap: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin-top: 0;
+  padding-bottom: 0.45rem;
+  background: var(--elev);
+}
+
+dialog.viewer h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.95rem;
+}
+
+dialog.viewer .section-head > button { flex: none; }
+
+.viewer-nav {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.viewer-nav p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .viewer-layout {
   display: grid;
   grid-template-columns: 1fr;
@@ -704,8 +825,10 @@ dialog.viewer::backdrop { background: rgba(0, 0, 0, 0.72); }
 .viewer-layout figure { margin: 0; }
 
 .viewer-layout img {
+  display: block;
   width: 100%;
-  height: auto;
+  height: min(62vh, 640px);
+  object-fit: contain;
   background: #05070a;
 }
 

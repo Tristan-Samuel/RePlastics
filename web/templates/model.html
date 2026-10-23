@@ -8,8 +8,10 @@
   {% set default_tab = 'overview' %}
   <header class="model-head">
     <div>
-      <h1 title="{{ model.stem }}">{{ model.stem|replace('_', '_​') }}</h1>
-      <p class="meta">{{ model.mtime_label }} · {{ model.size_label }}{% if model.frozen %} · hold &lt; {{ model.threshold }}{% endif %}</p>
+      <h1 title="{{ model.filename }}">{{ model.title }}</h1>
+      <p class="meta"><code>{{ model.filename }}</code> · {{ model.mtime_label }} · {{ model.size_label }}{% if model.default %} · default{% endif %}{% if model.frozen %} · hold &lt; {{ model.threshold }}{% endif %}</p>
+      <p class="hint">{{ model.role }}</p>
+      {% if model.warning %}<p class="warn-line">{{ model.warning }}</p>{% endif %}
     </div>
     <p class="scores">
       {{ metric("Validation", model.metrics.validation) }}
@@ -47,6 +49,7 @@
       {% if page.has_scores %}
         <section
           data-decide
+          data-thumbs="s"
           data-scores-url="{{ url_for('model_scores', stem=model.stem, run=(page.selected.rel if page.selected else ''), confidence=(page.confidence.folder.rel if page.confidence and page.confidence.folder else '')) }}"
           data-frozen="{{ model.threshold or '' }}"
         >
@@ -179,7 +182,15 @@
                 <option value="unknown">No resin tag</option>
               </select>
             </label>
-            <p class="hint">Counts use the whole split. Class and resin filter the photos.</p>
+            <div class="size-field">
+              <span>Size</span>
+              <div class="seg" role="group" aria-label="Photo size">
+                <button type="button" data-thumb="s" aria-pressed="true">Small</button>
+                <button type="button" data-thumb="m" aria-pressed="false">Medium</button>
+                <button type="button" data-thumb="l" aria-pressed="false">Large</button>
+              </div>
+            </div>
+            <p class="hint">Counts use the whole split. Class and resin filter the photos. Click a photo to open it.</p>
           </div>
 
           <div class="buckets">
@@ -399,6 +410,11 @@
   <dialog class="viewer" data-viewer>
       <div class="section-head">
         <h2 data-viewer-title>Photo</h2>
+        <div class="viewer-nav" data-viewer-nav hidden>
+          <button type="button" class="ghost" data-viewer-prev>Previous</button>
+          <p data-viewer-pos></p>
+          <button type="button" class="ghost" data-viewer-next>Next</button>
+        </div>
         <button type="button" class="ghost" data-viewer-close>Close</button>
       </div>
       <div class="viewer-layout">

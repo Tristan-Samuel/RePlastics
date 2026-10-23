@@ -62,6 +62,7 @@ def create_app():
         return render_template(
             "jobs.html",
             presets=PRESETS,
+            models=catalog.list_models(),
             data_roots=DATA_ROOTS,
             unfreeze=UNFREEZE,
             gpus=GPUS,
