@@ -19,6 +19,8 @@ from flask import (
     url_for,
 )
 
+from decide import scoring_temperature, scoring_threshold
+from preprocess import IMAGENET_MEAN, IMAGENET_STD, INPUT_SIZE
 from web import catalog
 from web.commands import GPUS, STEPS, UNFREEZE, CommandError, prepare
 from web.jobs import BusyError, runner
@@ -72,6 +74,35 @@ def create_app():
             datasets=catalog.dataset_counts(),
             belt_zip=str(BELT_ZIP),
             belt_zip_exists=BELT_ZIP.exists(),
+        )
+
+    @app.get("/jetson")
+    def jetson_page():
+        sidecar_path = ROOT / "models" / "resnext50_metal_plastic.onnx.json"
+        onnx_path = ROOT / "models" / "resnext50_metal_plastic.onnx"
+        class_to_idx = {"metal": 0, "plastic": 1}
+        checkpoint = "resnext50_metal_plastic_belt_stage1_layer4.pt"
+        if sidecar_path.is_file():
+            stored = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            if isinstance(stored.get("class_to_idx"), dict):
+                class_to_idx = {
+                    str(name): int(index)
+                    for name, index in stored["class_to_idx"].items()
+                }
+            if stored.get("checkpoint"):
+                checkpoint = str(stored["checkpoint"])
+        ordered = sorted(class_to_idx.items(), key=lambda item: item[1])
+        return render_template(
+            "jetson.html",
+            temperature=scoring_temperature(),
+            threshold=scoring_threshold(None),
+            mean=IMAGENET_MEAN,
+            std=IMAGENET_STD,
+            input_size=INPUT_SIZE,
+            onnx_ready=onnx_path.is_file(),
+            json_ready=sidecar_path.is_file(),
+            class_order=ordered,
+            checkpoint=checkpoint,
         )
 
     @app.get("/models")
