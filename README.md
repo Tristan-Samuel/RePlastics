@@ -97,7 +97,7 @@ python train.py --resume --unfreeze layer4 --lr 0.001 --lr-backbone 0.0001 --epo
 
 Train `fc` first. `--unfreeze layer4` also trains the last residual stage, at `--lr-backbone` (default `--lr / 10`). `layer3` and `all` are there for a later, larger set.
 
-A Colab T4 run, once the photo zip is on Drive:
+A Colab T4 run. The photo zip is `~/Downloads/belt_stage1_224.zip` on this computer:
 
 ```bash
 chmod +x colab_train.sh
@@ -106,7 +106,7 @@ chmod +x colab_train.sh
   --model models/resnext50_metal_plastic_belt_stage1_layer4.pt
 ```
 
-`--drive` is the photo zip. The weights are the `--model` file on this computer, uploaded as-is. The trained checkpoint is saved as a new file. The one you passed stays.
+`--drive` uploads that Downloads zip. Drive's copy is not read. The weights are the `--model` file on this computer, uploaded as-is. The trained checkpoint is saved as a new file. The one you passed stays.
 
 ## Score a photo
 
@@ -132,7 +132,7 @@ That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_pl
 python -m web
 ```
 
-Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Jobs lists every checkpoint with the validation, balanced, and test scores stored in the file, and a T4 run uploads the one you pick. Drive supplies the photo zip only. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide switches which analysis job's confidence scores are shown. Small, Medium, and Large set the photo sheet, and a click opens that photo so the arrow keys can move through the group. Jetson copies the export command, writes the ONNX and JSON, and opens that folder in Finder or Explorer.
+Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Jobs lists every checkpoint with the validation, balanced, and test scores stored in the file, and a T4 run uploads the one you pick plus `~/Downloads/belt_stage1_224.zip`. Drive's copy of that zip is not read. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide switches which analysis job's confidence scores are shown. Small, Medium, and Large set the photo sheet, and a click opens that photo so the arrow keys can move through the group. Jetson copies the export command, writes the ONNX and JSON, and opens that folder in Finder or Explorer.
 
 ## Belt stage 1 counts
 

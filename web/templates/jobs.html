@@ -8,7 +8,7 @@
 
   <div class="card explain">
     <p><strong>Weights</strong> come from the checkpoint on this computer. A T4 job uploads that file. A Google Drive file with the same name is not loaded, and no other model is substituted if the upload is missing.</p>
-    <p><strong>Photos</strong> come from <code>belt_stage1_224.zip</code> on Drive when Use Drive zip is checked. The dataset menu is for a run on this computer, or a T4 run with that box unchecked.</p>
+    <p><strong>Photos</strong> come from <code>{{ belt_zip.path }}</code> on this computer when Use Drive zip is checked.{% if belt_zip.present %} That file is {{ belt_zip.size_label }} ({{ belt_zip.bytes }} bytes), written {{ belt_zip.mtime_label }}: {{ belt_zip.total }} images, test metal {{ belt_zip.metal.test }}.{% else %} That file is missing, so a T4 run stops.{% endif %} The job uploads it. Drive's copy is not read. The dataset menu is for a run on this computer, or a T4 run with that box unchecked.</p>
     <p><strong>fc</strong> trains only the new 2-class layer. <strong>layer4</strong> also trains the last residual stage, which is what the 5 Oct model already did. A finished T4 run is saved as a new file. The one you started from stays, and <code>models/resnext50_metal_plastic.pt</code> keeps pointing at the 5 Oct model.</p>
   </div>
 

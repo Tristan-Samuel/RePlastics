@@ -16,7 +16,7 @@ from decide import (
 from preprocess import RESIN_ALIASES, resin_from_path
 
 from web.markdown import section, to_html
-from web.paths import DATA_ROOTS, IMAGE_SUFFIXES, RESINS, ROOT
+from web.paths import BELT_ZIP, DATA_ROOTS, IMAGE_SUFFIXES, RESINS, ROOT
 
 LEGACY_RUNS = {
     "resnext50_metal_plastic_belt_stage1_layer4.pt": (
@@ -69,6 +69,44 @@ def model_by_stem(stem):
         if model["stem"] == stem:
             return model
     return None
+
+
+def belt_zip_info():
+    """The photo zip a T4 run uploads. Counts come from the zip on this computer."""
+    path = BELT_ZIP
+    if not path.is_file():
+        return {"present": False, "path": str(path)}
+    counts = {"train": 0, "validation": 0, "test": 0}
+    metal = {"train": 0, "validation": 0, "test": 0}
+    import zipfile
+
+    with zipfile.ZipFile(path) as archive:
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            name = Path(info.filename)
+            if name.suffix.lower() not in IMAGE_SUFFIXES and name.suffix.lower() != ".bmp":
+                continue
+            parts = name.parts
+            if len(parts) < 3:
+                continue
+            split = "validation" if parts[-3] == "val" else parts[-3]
+            if split not in counts:
+                continue
+            counts[split] += 1
+            if parts[-2] in {"metal", "NonPlastic"}:
+                metal[split] += 1
+    stat = path.stat()
+    return {
+        "present": True,
+        "path": str(path),
+        "bytes": stat.st_size,
+        "size_label": f"{stat.st_size / (1024 * 1024):.1f} MB",
+        "mtime_label": datetime.fromtimestamp(stat.st_mtime).strftime("%d %b %Y %H:%M"),
+        "total": sum(counts.values()),
+        "counts": counts,
+        "metal": metal,
+    }
 
 
 def model_by_rel(rel):
@@ -680,6 +718,14 @@ _KNOWN = {
     "resnext50_metal_plastic_sep25_layer4.pt": {
         "title": "25 Sep layer4",
         "role": "Layer4 run from before the stage 1 photos were added.",
+    },
+    "resnext50_metal_plastic_belt_stage1_layer4_20261023-122128.pt": {
+        "title": "23 Oct 12:21 layer4",
+        "role": (
+            "Continued from the 5 Oct weights. Balanced validation 99.49% "
+            "and 150/150 on the old 300-image test. The T4 unpacked the "
+            "5 Oct zip, not the 11,274-image set on this computer."
+        ),
     },
 }
 

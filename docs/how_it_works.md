@@ -97,13 +97,13 @@ These scripts do not train. They exist because the photos arrived in different s
 - Real stage 1 NonPlastic training photos are cut down to 680 so they match the 680 belt cans in train. The rest start in test, then move to validation until metal validation and metal test differ by at most one. A 5-second burst stays together. The six foil trays called plastic are pinned two to train, one to validation, and three to test.
 - The same filename and the same file bytes are checked across train, validation, and test.
 
-**`prepare_drive_data.py`** runs on the Colab VM. It unzips the Drive archive onto local VM disk and remaps `NonPlastic` → `metal`. Training then reads local files. Reading every batch through Drive’s network filesystem is what made earlier runs stall.
+**`prepare_drive_data.py`** runs on the Colab VM. It unzips the uploaded archive onto local VM disk and remaps `NonPlastic` → `metal`. It uses the zip path it was given and does not search Drive for a different file. Training then reads local files.
 
 ### Getting that training onto a Colab GPU
 
 A Mac can run `train.py`, but the long runs happened on a Colab T4. The shell script is the entry point; the three Python files are workarounds for Colab CLI bugs.
 
-**`colab_train.sh`** starts a GPU session, uploads the training scripts, uploads the `--model` checkpoint from this computer, mounts Drive, copies the photo zip onto the VM, runs `train.py`, and downloads the trained file under a new name. The file you resumed stays. `--keep` leaves the VM up so the photos survive between runs. Drive is the photo zip only. A Drive file with the same checkpoint name is not loaded, and a missing upload is not replaced with a different model.
+**`colab_train.sh`** starts a GPU session, uploads the training scripts, uploads `~/Downloads/belt_stage1_224.zip` and the `--model` checkpoint from this computer, then runs `train.py`. Drive's copy of the zip is not read. Colab was still serving the 5 Oct zip after the file on this computer had changed. A missing upload is not replaced with another zip or another checkpoint. The trained file is downloaded under a new name. The file you resumed stays. `--keep` leaves the VM up so the photos survive between runs.
 
 **`colab_drivemount.py`** mounts Drive with the headers the official `colab drivemount` command omits. Without them Colab returns an HTML error and training never sees the photos.
 

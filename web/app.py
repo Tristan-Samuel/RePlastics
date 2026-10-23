@@ -63,6 +63,7 @@ def create_app():
             "jobs.html",
             presets=PRESETS,
             models=catalog.list_models(),
+            belt_zip=catalog.belt_zip_info(),
             data_roots=DATA_ROOTS,
             unfreeze=UNFREEZE,
             gpus=GPUS,

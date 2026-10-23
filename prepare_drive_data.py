@@ -326,28 +326,18 @@ def zip_fingerprint(zip_path):
 
 
 def resolve_zip(zip_path):
+    """Use the zip path that was passed in. Do not search Drive for another one."""
     if zip_path is None:
         return None
     zip_path = Path(zip_path)
-    candidates = [zip_path]
-    name = zip_path.name
-    candidates.extend(
-        [
-            Path("/content/drive/MyDrive") / name,
-            Path("/content/drive/My Drive") / name,
-            Path("/content") / name,
-        ]
+    exists = zip_path.is_file()
+    print(f"Zip candidate {zip_path} exists={exists}", flush=True)
+    if exists:
+        return zip_path
+    print(
+        f"Refusing to substitute another zip. {zip_path} is missing.",
+        flush=True,
     )
-    seen = set()
-    for candidate in candidates:
-        key = str(candidate)
-        if key in seen:
-            continue
-        seen.add(key)
-        exists = candidate.is_file()
-        print(f"Zip candidate {candidate} exists={exists}", flush=True)
-        if exists:
-            return candidate
     return None
 
 
@@ -381,9 +371,9 @@ def main():
     use_zip = zip_path is not None
     prepared_kind = zip_fingerprint(zip_path) if use_zip else None
     if args.zip is not None and not use_zip:
-        print(
-            f"Zip not found ({args.zip}). Falling back to per-file Drive copy.",
-            flush=True,
+        raise SystemExit(
+            f"Zip not found: {args.zip}. "
+            "Refusing to read a Drive zip or copy photos file by file."
         )
 
     print(f"Split dest: {dest}", flush=True)

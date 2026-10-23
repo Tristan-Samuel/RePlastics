@@ -23,6 +23,7 @@ DATA_DIR=""
 USE_DRIVE=0
 DRIVE_DIR="${COLAB_DRIVE_DIR:-stage1_binary_v2}"
 DATA_ZIP="${COLAB_DATA_ZIP:-belt_stage1_224.zip}"
+LOCAL_ZIP="${COLAB_LOCAL_ZIP:-$HOME/Downloads/$DATA_ZIP}"
 TRAIN_ARGS=()
 PHASE=start
 ONE_SHOT_UPLOAD_MAX=$((8 * 1024 * 1024))
@@ -36,11 +37,11 @@ Helper flags:
   --session NAME     Session name (default: trainer, or $COLAB_SESSION)
   --keep             Leave the VM running after training
   --timeout SECONDS  colab exec timeout (default: 21600)
-  --drive            Photos come from the Drive zip. Weights still come
-                     from --model on this computer.
-  --drive-dir PATH   Folder under MyDrive (default: stage1_binary_v2)
-                     Photos come from MyDrive/$COLAB_DATA_ZIP
-                     (default: belt_stage1_224.zip)
+  --drive            Upload ~/Downloads/belt_stage1_224.zip from this
+                     computer. Drive's copy of that zip is not read.
+                     Weights still come from --model on this computer.
+  --drive-dir PATH   Folder under MyDrive (default: stage1_binary_v2).
+                     Used only if the local zip is not how photos arrive.
   --data-dir DIR     Local dataset root to upload (ignored with --drive)
   -h, --help         Show this help
 
@@ -163,7 +164,17 @@ RESULT_PATH="models/${RESULT_NAME}"
 if [[ "$RESUME" -eq 1 ]]; then
     echo "Starting weights on this computer: $MODEL_PATH"
     echo "Trained weights will be saved as a new file: $RESULT_PATH"
-    echo "Google Drive is photos only. This run does not load a checkpoint from Drive."
+    echo "A Drive checkpoint with the same name is not loaded."
+fi
+if [[ "$USE_DRIVE" -eq 1 ]]; then
+    if [[ ! -f "$LOCAL_ZIP" ]]; then
+        echo "Cannot train. This computer has no photo zip at $LOCAL_ZIP" >&2
+        echo "Drive's copy is not used. Colab was still serving the 5 Oct zip after this file changed." >&2
+        exit 1
+    fi
+    LOCAL_ZIP_BYTES="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$LOCAL_ZIP")"
+    echo "Photos from this computer: $LOCAL_ZIP ($LOCAL_ZIP_BYTES bytes)"
+    echo "Drive's $DATA_ZIP is not read."
 fi
 
 ensure_colab_cli() {
@@ -200,7 +211,8 @@ LAST_EXEC_LOG="$ROOT/.colab_last_exec.log"
 rm -f "$BUNDLE" "$RUN_FILE" "$EXTRACT_FILE" "$PREPARE_FILE" "$ASSEMBLE_FILE" "$LAST_EXEC_LOG"
 
 if [[ "$USE_DRIVE" -eq 1 ]]; then
-    echo "Packing training scripts only. Photos will come from Google Drive ($DRIVE_DIR)."
+    echo "Packing training scripts only."
+    echo "Photos will be uploaded from $LOCAL_ZIP. Drive's zip is not read."
     echo "The checkpoint named by --model is uploaded from this computer."
     PACK_DATA=""
     ZIP_RESUME=0
@@ -340,7 +352,7 @@ import sys
 
 prepare_file = Path(sys.argv[1])
 source = sys.argv[2]
-zip_path = "/content/drive/MyDrive/" + sys.argv[3]
+zip_path = "/content/" + sys.argv[3]
 prepare_file.write_text(
     "import json\n"
     "import runpy\n"
@@ -564,7 +576,7 @@ upload_bundle() {
 }
 
 ensure_scripts_on_vm() {
-    echo "Uploading training scripts (photos stay on Drive until copied onto the VM disk)"
+    echo "Uploading training scripts"
     upload_bundle
     PHASE=uploaded
     echo "Extracting training scripts on the VM"
@@ -576,40 +588,35 @@ mount_google_drive() {
     "$COLAB_PY" "$ROOT/colab_drivemount.py" "$SESSION"
 }
 
-upload_local_checkpoint() {
-    local real name expected prefix
-    [[ "$RESUME" -eq 1 ]] || return 0
-    if [[ ! -f "$MODEL_PATH" ]]; then
-        echo "Cannot resume. This computer has no file at $MODEL_PATH" >&2
-        echo "Drive is not searched, and no other checkpoint is substituted." >&2
-        exit 1
-    fi
-    real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$MODEL_PATH")"
-    name="$(basename "$MODEL_PATH")"
-    expected="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$real")"
-    echo "Uploading this computer's checkpoint. Drive is not a source of weights."
-    echo "  selected: $MODEL_PATH"
-    echo "  bytes:    $real ($expected bytes)"
-    prefix="content/ckpt_${STAMP}.part"
-    python3 "$ROOT/colab_upload.py" "$SESSION" "$real" "$prefix"
-    python3 - "$ASSEMBLE_FILE" "$name" "$STAMP" "$expected" <<'PY'
+upload_exact_file() {
+    local src="$1"
+    local dest_rel="$2"
+    local tag="$3"
+    local expected prefix
+    expected="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$src")"
+    echo "Uploading $src"
+    echo "  $expected bytes -> /content/$dest_rel"
+    prefix="content/${tag}_${STAMP}.part"
+    python3 "$ROOT/colab_upload.py" "$SESSION" "$src" "$prefix"
+    python3 - "$ASSEMBLE_FILE" "$dest_rel" "$tag" "$STAMP" "$expected" <<'PY'
 from pathlib import Path
 import sys
 
-dest_path, name, stamp, expected = sys.argv[1:]
+script_path, dest_rel, tag, stamp, expected = sys.argv[1:]
 expected = int(expected)
 text = f"""from pathlib import Path
 
-name = {name!r}
+dest_rel = {dest_rel!r}
+tag = {tag!r}
 stamp = {stamp!r}
 expected = {expected}
 content = Path("/content")
-parts = sorted(content.glob(f"ckpt_{{stamp}}.part.*"))
+parts = sorted(content.glob(f"{{tag}}_{{stamp}}.part.*"))
 if not parts:
-    raise SystemExit("The checkpoint upload left no parts on the VM.")
-dest = content / "models" / name
+    raise SystemExit(f"Upload of {{dest_rel}} left no parts on the VM.")
+dest = content / dest_rel
 dest.parent.mkdir(parents=True, exist_ok=True)
-tmp = dest.with_suffix(".uploading")
+tmp = dest.with_name(dest.name + ".uploading")
 total = 0
 with tmp.open("wb") as out:
     for part in parts:
@@ -619,18 +626,38 @@ with tmp.open("wb") as out:
 if total != expected:
     tmp.unlink(missing_ok=True)
     raise SystemExit(
-        f"Uploaded checkpoint is {{total}} bytes. This computer's file is {{expected}} bytes."
+        f"Uploaded {{dest_rel}} is {{total}} bytes. This computer's file is {{expected}} bytes."
     )
 tmp.replace(dest)
 for part in parts:
     part.unlink()
-print(f"VM checkpoint is this computer's file: {{dest}} ({{total}} bytes)", flush=True)
+print(f"VM file is this computer's file: {{dest}} ({{total}} bytes)", flush=True)
 print("COLAB_STEP_OK", flush=True)
 """
-Path(dest_path).write_text(text, encoding="utf-8")
+Path(script_path).write_text(text, encoding="utf-8")
 PY
-    echo "Checking the uploaded checkpoint matches this computer's file"
-    colab_exec 180 "$ASSEMBLE_FILE"
+    colab_exec 300 "$ASSEMBLE_FILE"
+}
+
+upload_local_zip() {
+    echo "Photos come from this computer. Drive's zip is not read."
+    upload_exact_file "$LOCAL_ZIP" "$DATA_ZIP" "zip"
+}
+
+upload_local_checkpoint() {
+    local real name
+    [[ "$RESUME" -eq 1 ]] || return 0
+    if [[ ! -f "$MODEL_PATH" ]]; then
+        echo "Cannot resume. This computer has no file at $MODEL_PATH" >&2
+        echo "Drive is not searched, and no other checkpoint is substituted." >&2
+        exit 1
+    fi
+    real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$MODEL_PATH")"
+    name="$(basename "$MODEL_PATH")"
+    echo "Weights come from this computer. A Drive checkpoint is not substituted."
+    echo "  selected: $MODEL_PATH"
+    echo "  bytes:    $real"
+    upload_exact_file "$real" "models/$name" "ckpt"
 }
 
 trap cleanup EXIT
@@ -649,9 +676,10 @@ fi
 if [[ "$USE_DRIVE" -eq 1 ]]; then
     ensure_scripts_on_vm
     PHASE=uploaded
+    upload_local_zip
     mount_google_drive
     upload_local_checkpoint
-    echo "Preparing photos on the VM (256px zip if present, else Drive copy)"
+    echo "Preparing photos from this computer's zip"
     colab_exec 3600 "$PREPARE_FILE"
 elif vm_has 'train.py'; then
     echo "Training scripts already on the VM; skipping upload."

@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from web.catalog import model_by_rel
-from web.paths import DATA_ROOTS, ROOT
+from web.paths import BELT_ZIP, DATA_ROOTS, ROOT
 
 UNFREEZE = ("fc", "layer4", "layer3", "all")
 GPUS = ("T4", "L4", "A100")
@@ -295,7 +295,20 @@ def _pct(value):
     return f"{float(value) * 100:.2f}%"
 
 
-def _checkpoint_note(model_text, where):
+def _photo_note():
+    if not BELT_ZIP.is_file():
+        return (
+            f"This computer has no photo zip at {BELT_ZIP}. "
+            "The T4 run will stop. Drive's copy is not used."
+        )
+    size = BELT_ZIP.stat().st_size
+    return (
+        f"Photos: {BELT_ZIP} ({size:,} bytes) on this computer. "
+        "That file is uploaded. Drive's zip is not read."
+    )
+
+
+def _checkpoint_note(model_text, where, drive):
     model = model_by_rel(model_text)
     if model is None:
         return f"Starting file: {model_text}. It has to be a checkpoint on this computer."
@@ -314,8 +327,10 @@ def _checkpoint_note(model_text, where):
     if where == "colab":
         lines.append(
             "Those bytes are uploaded from this computer. "
-            "Drive supplies the photo zip only and is not a source of weights."
+            "A Drive file with the same checkpoint name is not loaded."
         )
+        if drive:
+            lines.append(_photo_note())
         lines.append(
             "The trained file is saved under a new name. This starting file stays."
         )
@@ -345,7 +360,7 @@ def _prepare_train(form, require_confirm):
     where = (form.get("where") or "local").strip()
     resume = _flag(form, "resume")
     model_text = _model_path(form.get("model"), must_exist=resume)
-    note = _checkpoint_note(model_text, where) if resume else ""
+    note = _checkpoint_note(model_text, where, _flag(form, "drive")) if resume else ""
     if where == "local" and require_confirm and resume:
         model_text = _copy_for_run(model_text)
     train_args = _train_args(form, model_text)
