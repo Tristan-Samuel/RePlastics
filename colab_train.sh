@@ -22,6 +22,7 @@ TIMEOUT="${COLAB_TIMEOUT:-21600}"
 DATA_DIR=""
 USE_DRIVE=0
 DRIVE_DIR="${COLAB_DRIVE_DIR:-stage1_binary_v2}"
+DATA_ZIP="${COLAB_DATA_ZIP:-belt_stage1_224.zip}"
 TRAIN_ARGS=()
 PHASE=start
 ONE_SHOT_UPLOAD_MAX=$((8 * 1024 * 1024))
@@ -37,6 +38,8 @@ Helper flags:
   --timeout SECONDS  colab exec timeout (default: 21600)
   --drive            Mount Google Drive instead of uploading images
   --drive-dir PATH   Folder under MyDrive (default: stage1_binary_v2)
+                     Photos come from MyDrive/$COLAB_DATA_ZIP
+                     (default: belt_stage1_224.zip)
   --data-dir DIR     Local dataset root to upload (ignored with --drive)
   -h, --help         Show this help
 
@@ -277,6 +280,9 @@ import sys
 
 run_file = Path(sys.argv[1])
 train_args = json.loads(sys.argv[2])
+model_rel = "models/resnext50_metal_plastic.pt"
+if "--model" in train_args:
+    model_rel = train_args[train_args.index("--model") + 1]
 run_file.write_text(
     "import json\n"
     "import runpy\n"
@@ -285,7 +291,7 @@ run_file.write_text(
     "from pathlib import Path\n"
     f"sys.argv = ['train.py'] + {json.dumps(train_args)}\n"
     "runpy.run_path('train.py', run_name='__main__')\n"
-    "src = Path('/content/models/resnext50_metal_plastic.pt')\n"
+    f"src = Path('/content') / {json.dumps(model_rel)}\n"
     "if not src.is_file():\n"
     "    raise SystemExit('train.py finished without writing the checkpoint')\n"
     "shutil.copy2(src, Path('/content/best.pt'))\n"
@@ -314,14 +320,14 @@ else
     DRIVE_SOURCE="/content/drive/MyDrive/$DRIVE_DIR"
 fi
 
-python3 - "$PREPARE_FILE" "$DRIVE_SOURCE" <<'PY'
+python3 - "$PREPARE_FILE" "$DRIVE_SOURCE" "$DATA_ZIP" <<'PY'
 from pathlib import Path
 import json
 import sys
 
 prepare_file = Path(sys.argv[1])
 source = sys.argv[2]
-zip_path = "/content/drive/MyDrive/stage1_binary_v2_256.zip"
+zip_path = "/content/drive/MyDrive/" + sys.argv[3]
 prepare_file.write_text(
     "import json\n"
     "import runpy\n"
@@ -336,7 +342,26 @@ prepare_file.write_text(
 print(f"Wrote {prepare_file} for {source} (zip {zip_path})")
 PY
 
-cp "$ROOT/colab_copy_checkpoint.py" "$CHECKPOINT_FILE"
+python3 - "$CHECKPOINT_FILE" "$(basename "$MODEL_PATH")" "$ROOT/colab_copy_checkpoint.py" <<'PY'
+from pathlib import Path
+import sys
+
+dest, name, source = sys.argv[1:]
+text = Path(source).read_text(encoding="utf-8")
+text = text.replace(
+    'DEST = Path("/content/models/resnext50_metal_plastic.pt")',
+    f'DEST = Path("/content/models/{name}")',
+    1,
+)
+text = text.replace(
+    "CANDIDATES = [",
+    "CANDIDATES = [\n    Path(\n"
+    f'        "/content/drive/MyDrive/metal-plastic-sorting/{name}"\n'
+    "    ),",
+    1,
+)
+Path(dest).write_text(text, encoding="utf-8")
+PY
 echo "Wrote $CHECKPOINT_FILE"
 
 cat > "$EXTRACT_FILE" <<'PY'
@@ -446,11 +471,30 @@ download_checkpoint() {
     return 1
 }
 
+# A real terminal can take the sign-in URL. The lab job has no
+# controlling terminal, and /dev/tty then fails with "Device not configured".
+tty_is_usable() {
+    : >/dev/tty 2>/dev/null
+}
+
 # colab status prints "not found" but still exits 0.
 colab_session_is_up() {
-    local output
-    output="$(colab status -s "$SESSION" 2>&1)" || true
-    if [[ "${1:-}" == "print" ]]; then
+    local output tmp
+    tmp="$(mktemp)"
+    # Show the sign-in URL as it arrives. Command substitution would
+    # hide it until this command exits, which is after the code is pasted.
+    set +e
+    set +o pipefail
+    if tty_is_usable; then
+        colab status -s "$SESSION" 2>&1 | tee /dev/tty >"$tmp"
+    else
+        colab status -s "$SESSION" 2>&1 | tee "$tmp"
+    fi
+    set -o pipefail
+    set -e
+    output="$(cat "$tmp")"
+    rm -f "$tmp"
+    if [[ "${1:-}" == "print" ]] && tty_is_usable; then
         printf '%s\n' "$output"
     fi
     printf '%s\n' "$output" | grep -Eq 'IDLE|BUSY|READY'
@@ -547,10 +591,10 @@ stage_checkpoint_on_drive() {
 
     for my_drive in "$HOME/Library/CloudStorage"/GoogleDrive-*/"My Drive"; do
         if [[ -d "$my_drive" ]]; then
-            dest="$my_drive/metal-plastic-sorting/resnext50_metal_plastic.pt"
+            dest="$my_drive/metal-plastic-sorting/$(basename "$MODEL_PATH")"
             mkdir -p "$(dirname "$dest")"
             if [[ -f "$dest" ]]; then
-                echo "Checkpoint already on Google Drive at metal-plastic-sorting/"
+                echo "Checkpoint already on Google Drive at metal-plastic-sorting/$(basename "$MODEL_PATH")"
                 return 0
             fi
             echo "Copying checkpoint to Google Drive (once). Colab will read it from there."

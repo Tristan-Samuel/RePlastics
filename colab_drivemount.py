@@ -149,8 +149,15 @@ def propagate_drive_credentials(endpoint: str) -> bool:
         if sys.stdin.isatty():
             input("Press Enter after Google says you can close the tab: ")
         else:
-            with open("/dev/tty", encoding="utf-8") as tty:
-                tty.readline()
+            try:
+                with open("/dev/tty", encoding="utf-8") as tty:
+                    tty.readline()
+            except OSError:
+                log(
+                    "No terminal here. Send Enter from the job input "
+                    "after Google says you can close the tab."
+                )
+                sys.stdin.readline()
 
     params["dryrun"] = "false"
     log("Propagating Drive credentials onto the VM...")
