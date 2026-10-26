@@ -578,6 +578,12 @@ pre, .command {
 
 .model-tools .hint { margin: 0 0 0.45rem; }
 
+.check-result { margin: 0.2rem 0 1rem; }
+
+.check-result .scores { margin-top: 0; }
+
+.check-result p { margin: 0.2rem 0; }
+
 .size-field {
   display: flex;
   flex-direction: column;

@@ -23,7 +23,7 @@ from flask import (
 
 from web import catalog
 from web.commands import GPUS, STEPS, UNFREEZE, CommandError, onnx_display, prepare
-from web.jobs import BusyError, runner
+from web.jobs import BusyError, latest_onnx_check, runner
 from web.paths import (
     BELT_ZIP,
     DATA_ROOTS,
@@ -110,6 +110,7 @@ def create_app():
             onnx_ready=bool(onnx_rel) and (ROOT / onnx_rel).is_file(),
             json_ready=bool(json_rel) and (ROOT / json_rel).is_file(),
             onnx_files=_onnx_files(),
+            check=latest_onnx_check(onnx_rel),
         )
 
     @app.get("/models")

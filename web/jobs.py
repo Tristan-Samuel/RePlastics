@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -9,6 +10,135 @@ from datetime import datetime
 from pathlib import Path
 
 from web.paths import JOB_LOGS, ROOT
+
+
+_SCORE = re.compile(
+    r"^(?P<engine>PyTorch|ONNX): accuracy (?P<accuracy>\S+) \| "
+    r"balanced (?P<balanced>\S+)(?: \| (?P<detail>.*))?$"
+)
+_DISAGREE = re.compile(
+    r"^Argmax disagreements: (?P<argmax>\d+)\. "
+    r"Hold disagreements: (?P<hold>\d+)\. "
+    r"Uncertain: PyTorch (?P<torch_uncertain>\d+), "
+    r"ONNX (?P<onnx_uncertain>\d+)\.$"
+)
+_WORST = re.compile(r"^Worst max abs logit diff (?P<diff>\S+)\.$")
+_MATCH = re.compile(r"^ONNX matches PyTorch on (?P<count>\d+) test image")
+
+
+def latest_onnx_check(onnx_rel):
+    """The newest finished ONNX check for this file, from the job logs."""
+    needle = (onnx_rel or "").replace("\\", "/").strip()
+    if not needle or not JOB_LOGS.is_dir():
+        return None
+    logs = sorted(
+        JOB_LOGS.glob("*.log"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in logs[:40]:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if needle not in text.replace("\\", "/"):
+            continue
+        parsed = _parse_onnx_check(text)
+        if parsed is None:
+            continue
+        parsed["when"] = datetime.fromtimestamp(path.stat().st_mtime).strftime(
+            "%d %b %Y %H:%M"
+        )
+        return parsed
+    return None
+
+
+def _parse_onnx_check(text):
+    scores = {}
+    disagree = worst = count = None
+    failed = False
+    for line in text.splitlines():
+        score = _SCORE.match(line.strip())
+        if score:
+            scores[score.group("engine")] = {
+                "accuracy": score.group("accuracy"),
+                "balanced": score.group("balanced"),
+                "detail": (score.group("detail") or "").replace(" | ", " · "),
+            }
+            continue
+        found = _DISAGREE.match(line.strip())
+        if found:
+            disagree = found.groupdict()
+            continue
+        found = _WORST.match(line.strip())
+        if found:
+            worst = found.group("diff").rstrip(".")
+            continue
+        found = _MATCH.match(line.strip())
+        if found:
+            count = found.group("count")
+            continue
+        if line.startswith("ONNX labels do not match"):
+            failed = True
+    torch_score = scores.get("PyTorch")
+    onnx_score = scores.get("ONNX")
+    if torch_score is None and onnx_score is None and not failed:
+        return None
+    if disagree and (
+        disagree["argmax"] != "0" or disagree["hold"] != "0"
+    ):
+        failed = True
+    detail = ""
+    if torch_score and onnx_score:
+        if torch_score["detail"] == onnx_score["detail"]:
+            detail = torch_score["detail"]
+        else:
+            detail = (
+                f"PyTorch {torch_score['detail']}. "
+                f"ONNX {onnx_score['detail']}."
+            ).strip()
+    elif torch_score:
+        detail = torch_score["detail"]
+    elif onnx_score:
+        detail = onnx_score["detail"]
+    uncertain = ""
+    if disagree:
+        if disagree["torch_uncertain"] == disagree["onnx_uncertain"]:
+            uncertain = f"Uncertain {disagree['torch_uncertain']}."
+        else:
+            uncertain = (
+                f"Uncertain: PyTorch {disagree['torch_uncertain']}, "
+                f"ONNX {disagree['onnx_uncertain']}."
+            )
+    if failed:
+        parts = ["ONNX labels do not match PyTorch."]
+        if disagree:
+            parts.append(
+                f"Argmax disagreements {disagree['argmax']}. "
+                f"Hold disagreements {disagree['hold']}."
+            )
+        parts.append("Leave this file off the Jetson.")
+        note = " ".join(parts)
+    elif count:
+        parts = [
+            f"Matches on {count} test images. Same argmax and the same hold."
+        ]
+        if uncertain:
+            parts.append(uncertain)
+        if worst:
+            parts.append(f"Worst logit diff {worst}.")
+        note = " ".join(parts)
+    else:
+        note = uncertain
+    return {
+        "torch_accuracy": (torch_score or {}).get("accuracy") or "—",
+        "torch_balanced": (torch_score or {}).get("balanced") or "—",
+        "onnx_accuracy": (onnx_score or {}).get("accuracy") or "—",
+        "onnx_balanced": (onnx_score or {}).get("balanced") or "—",
+        "detail": detail,
+        "note": note,
+        "failed": failed,
+    }
 
 
 def _alive(pid):
@@ -225,7 +355,8 @@ class Runner:
             self.running = False
             self.proc = None
             if code == 0:
-                self.status_line = "Finished"
+                if "accuracy" not in self.status_line:
+                    self.status_line = "Finished"
             else:
                 self.status_line = f"Exited {code}"
             self._save_record()
