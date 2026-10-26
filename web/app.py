@@ -81,15 +81,35 @@ def create_app():
 
     @app.get("/jetson")
     def jetson_page():
-        onnx_path = ROOT / "models" / "resnext50_metal_plastic.onnx"
-        json_path = ROOT / "models" / "resnext50_metal_plastic.onnx.json"
+        models = catalog.list_models()
+        data_roots = catalog.present_data_roots()
+        selected = _chosen_model(request.args.get("model"), models)
+        data_name = _chosen_data(request.args.get("data"))
+        onnx_rel = ""
+        json_rel = ""
+        export_command = ""
+        if selected and data_name in data_roots:
+            onnx_rel = str(Path(selected).with_suffix(".onnx"))
+            json_rel = onnx_rel + ".json"
+            try:
+                export_command = onnx_display(selected, data_name)
+            except CommandError:
+                export_command = ""
+        engine_onnx = Path(onnx_rel).name if onnx_rel else "model.onnx"
         return render_template(
             "jetson.html",
-            export_command=onnx_display(),
-            onnx_rel="models/resnext50_metal_plastic.onnx",
-            json_rel="models/resnext50_metal_plastic.onnx.json",
-            onnx_ready=onnx_path.is_file(),
-            json_ready=json_path.is_file(),
+            models=models,
+            data_roots=data_roots,
+            selected_model=selected,
+            selected_data=data_name,
+            export_command=export_command,
+            engine_onnx=engine_onnx,
+            engine_stem=Path(engine_onnx).stem,
+            onnx_rel=onnx_rel,
+            json_rel=json_rel,
+            onnx_ready=bool(onnx_rel) and (ROOT / onnx_rel).is_file(),
+            json_ready=bool(json_rel) and (ROOT / json_rel).is_file(),
+            onnx_files=_onnx_files(),
         )
 
     @app.get("/models")
@@ -99,6 +119,62 @@ def create_app():
             models=catalog.list_models(),
             others=catalog.other_analyses(),
         )
+
+    @app.post("/models/<stem>/delete")
+    def delete_model(stem):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", stem):
+            abort(404)
+        if request.form.get("confirm") != "yes":
+            return render_template(
+                "error.html",
+                message="Confirm this delete in the browser before removing the checkpoint.",
+            ), 400
+        try:
+            catalog.delete_model(stem)
+        except FileNotFoundError:
+            abort(404)
+        return redirect(url_for("models_page"))
+
+    @app.post("/models/<stem>/rename")
+    def rename_model(stem):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", stem):
+            abort(404)
+        back_list = request.form.get("next") == "models"
+        back_url = url_for("models_page") if back_list else url_for("model_page", stem=stem)
+        back_label = "Back to models" if back_list else "Back to the model"
+        try:
+            model = catalog.rename_model(
+                stem,
+                request.form.get("filename") or "",
+                request.form.get("title") or "",
+            )
+        except FileNotFoundError:
+            abort(404)
+        except ValueError as exc:
+            return render_template(
+                "error.html",
+                message=str(exc),
+                back_url=back_url,
+                back_label=back_label,
+            ), 400
+        if back_list:
+            args = {}
+            query = (request.form.get("q") or "").strip()[:200]
+            sort = (request.form.get("sort") or "").strip()
+            if query:
+                args["q"] = query
+            if sort in {
+                "oldest",
+                "name",
+                "name-desc",
+                "balanced",
+                "validation",
+                "test",
+                "size",
+            }:
+                args["sort"] = sort
+            return redirect(url_for("models_page", **args))
+        return redirect(url_for("model_page", stem=model["stem"]))
 
     @app.get("/models/<stem>")
     def model_page(stem):
@@ -279,6 +355,32 @@ def create_app():
         return render_template("error.html", message="That page is not here."), 404
 
     return app
+
+
+def _chosen_model(raw, models):
+    text = (raw or "").replace("\\", "/").strip()
+    rels = [model["rel"] for model in models]
+    if text in rels:
+        return text
+    for model in models:
+        if model["default"]:
+            return model["rel"]
+    if rels:
+        return rels[0]
+    return ""
+
+
+def _onnx_files():
+    models_dir = ROOT / "models"
+    if not models_dir.is_dir():
+        return []
+    found = []
+    for path in models_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.name.endswith(".onnx") or path.name.endswith(".onnx.json"):
+            found.append(path.relative_to(ROOT).as_posix())
+    return found
 
 
 def _default_data():

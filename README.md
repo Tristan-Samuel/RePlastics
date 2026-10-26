@@ -121,10 +121,10 @@ python predict.py --images path/to/photo.jpg --no-show
 
 ```bash
 pip install onnx onnxruntime
-python export_onnx.py --check --data-dir data_belt_stage1
+python export_onnx.py --model models/resnext50_metal_plastic.pt --check --data-dir data_belt_stage1
 ```
 
-That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_plastic.onnx.json`. The graph is two logits. The camera process still does the 224 resize, ImageNet normalize, and the 0.85 hold. Copy both files to the Jetson and build the engine there: [docs/jetson.md](docs/jetson.md). The lab page is [Jetson](http://127.0.0.1:5050/jetson).
+That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_plastic.onnx.json`. Another checkpoint writes `models/<that stem>.onnx`. The graph is two logits. `--check` scores every test photo in PyTorch and in ONNX Runtime and prints accuracy, balanced accuracy, and any label that changed. The camera process still does the 224 resize, ImageNet normalize, and the 0.85 hold. Copy both files to the Jetson and build the engine there: [docs/jetson.md](docs/jetson.md). The lab page is [Jetson](http://127.0.0.1:5050/jetson). Pick the checkpoint there.
 
 ## Lab
 
@@ -132,7 +132,7 @@ That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_pl
 python -m web
 ```
 
-Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Jobs lists every checkpoint with the validation, balanced, and test scores stored in the file, and a T4 run uploads the one you pick plus `~/Downloads/belt_stage1_224.zip`. Drive's copy of that zip is not read. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide switches which analysis job's confidence scores are shown. Small, Medium, and Large set the photo sheet, and a click opens that photo so the arrow keys can move through the group. Jetson copies the export command, writes the ONNX and JSON, and opens that folder in Finder or Explorer.
+Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Jobs lists every checkpoint with the validation, balanced, and test scores stored in the file, and a T4 run uploads the one you pick plus `~/Downloads/belt_stage1_224.zip`. Drive's copy of that zip is not read. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide is on every checkpoint, and the 0.85 hold applies to each of them. With saved logits it switches which analysis job's confidence scores are shown. Without them it offers a confidence report. Start on Jobs copies the checkpoint you picked into `models/` and trains that copy. Delete or rename a checkpoint from Models. Filter and sort are on that page. The name is the label. The file field moves the checkpoint, the ONNX pair beside it, and its analysis folder. `models/names.json` keeps the label. Small, Medium, and Large set the photo sheet, and a click opens that photo so the arrow keys can move through the group. Jetson picks the checkpoint, copies the export command, writes an ONNX named after that file, scores the test split against PyTorch, and opens that folder in Finder or Explorer.
 
 ## Belt stage 1 counts
 

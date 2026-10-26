@@ -1,0 +1,17 @@
+<form method="post" action="{{ url_for('rename_model', stem=model.stem) }}" class="rename-form">
+  <p class="hint rename-note">Name is the label. File renames the checkpoint, the ONNX files beside it, and its analysis folder.</p>
+  <label>
+    Name
+    <input name="title" value="{{ model.title }}" required maxlength="120" autocomplete="off">
+  </label>
+  <label class="file">
+    File
+    <input name="filename" value="{{ model.filename }}" required maxlength="184" spellcheck="false" autocapitalize="off" autocomplete="off">
+  </label>
+  {% if next == 'models' %}
+    <input type="hidden" name="next" value="models">
+    <input type="hidden" name="q" value="">
+    <input type="hidden" name="sort" value="">
+  {% endif %}
+  <button>Rename</button>
+</form>

@@ -31,7 +31,9 @@ function setLogOpen(open) {
 }
 
 function setBusy(running) {
-  document.querySelectorAll('form[action$="/jobs/start"] button').forEach((button) => {
+  document.querySelectorAll(
+    'form[action$="/jobs/start"] button, button[form="onnx-form"]'
+  ).forEach((button) => {
     button.disabled = running;
   });
   const stop = document.querySelector("#stop-job");
@@ -257,6 +259,75 @@ if (trainForm) {
     }
   });
   refresh();
+}
+
+const onnxForm = document.querySelector("#onnx-form");
+if (onnxForm) {
+  const command = document.querySelector("#onnx-command");
+  const engine = document.querySelector("#engine-command");
+  const hint = document.querySelector("#onnx-hint");
+  const filesNode = document.querySelector("#onnx-files");
+  const files = new Set(filesNode ? JSON.parse(filesNode.textContent) : []);
+  const showOnnx = document.querySelector("#show-onnx");
+  const showJson = document.querySelector("#show-json");
+  let timer = null;
+
+  const onnxFor = (rel) => (rel.endsWith(".pt") ? `${rel.slice(0, -3)}.onnx` : rel);
+  const baseName = (rel) => rel.split("/").pop();
+
+  const syncFiles = () => {
+    const model = onnxForm.elements.model.value;
+    const dataDir = onnxForm.elements.data_dir.value;
+    const onnx = onnxFor(model);
+    const json = `${onnx}.json`;
+    const onnxName = baseName(onnx);
+    const stem = onnxName.endsWith(".onnx") ? onnxName.slice(0, -5) : onnxName;
+    if (engine) {
+      engine.textContent =
+        `/usr/src/tensorrt/bin/trtexec --onnx=${onnxName} ` +
+        `--saveEngine=/opt/replastics/${stem}.engine --fp16`;
+    }
+    const onnxReady = files.has(onnx);
+    const jsonReady = files.has(json);
+    if (showOnnx) {
+      showOnnx.hidden = !onnxReady;
+      const input = showOnnx.querySelector("input[name=path]");
+      if (input) input.value = onnx;
+    }
+    if (showJson) {
+      showJson.hidden = !jsonReady;
+      const input = showJson.querySelector("input[name=path]");
+      if (input) input.value = json;
+    }
+    if (hint) {
+      hint.textContent = onnxReady && jsonReady
+        ? `${onnx} and ${json}`
+        : `Make ONNX writes ${onnx} and ${json}, then scores test photos in ${dataDir}.`;
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("model", model);
+    url.searchParams.set("data", dataDir);
+    window.history.replaceState(null, "", url);
+  };
+
+  const refreshOnnx = () => {
+    showSelectedModel(onnxForm);
+    syncFiles();
+    fetch("/jobs/preview", { method: "POST", body: new FormData(onnxForm) })
+      .then((response) => response.json())
+      .then((data) => {
+        if (command) command.textContent = data.ok ? data.display : data.error;
+      })
+      .catch(() => {
+        if (command) command.textContent = "Could not build the command.";
+      });
+  };
+  onnxForm.addEventListener("input", () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(refreshOnnx, 150);
+  });
+  onnxForm.addEventListener("change", refreshOnnx);
+  refreshOnnx();
 }
 
 setBusy(document.body.dataset.running === "yes");
@@ -1120,3 +1191,148 @@ if (photos && viewer) {
     });
   });
 }
+
+const MODEL_SORTS = new Set([
+  "newest",
+  "oldest",
+  "name",
+  "name-desc",
+  "balanced",
+  "validation",
+  "test",
+  "size",
+]);
+
+function checkpointName(value) {
+  const name = value.trim();
+  if (!name) return name;
+  if (name.toLowerCase().endsWith(".pt")) return name.slice(0, -3) + ".pt";
+  return name + ".pt";
+}
+
+function modelNumber(row, key) {
+  const raw = row.dataset[key];
+  if (raw === undefined || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function applyModelList() {
+  const tools = document.querySelector("[data-model-tools]");
+  const list = document.querySelector("[data-model-list]");
+  if (!tools || !list) return;
+  const filter = tools.querySelector("[data-model-filter]");
+  const sort = tools.querySelector("[data-model-sort]");
+  const count = tools.querySelector("[data-model-count]");
+  const empty = document.querySelector("[data-model-empty]");
+  const query = filter.value.trim().toLocaleLowerCase();
+  const mode = MODEL_SORTS.has(sort.value) ? sort.value : "newest";
+  const rows = [...list.children].map((row, index) => ({ row, index }));
+  rows.sort((a, b) => {
+    let diff = 0;
+    if (mode === "oldest") {
+      diff = modelNumber(a.row, "mtime") - modelNumber(b.row, "mtime");
+    } else if (mode === "name" || mode === "name-desc") {
+      diff = (a.row.dataset.title || "").localeCompare(
+        b.row.dataset.title || "",
+        undefined,
+        { sensitivity: "base", numeric: true }
+      );
+      if (mode === "name-desc") diff = -diff;
+    } else if (mode === "newest") {
+      diff = modelNumber(b.row, "mtime") - modelNumber(a.row, "mtime");
+    } else {
+      const left = modelNumber(a.row, mode);
+      const right = modelNumber(b.row, mode);
+      if (left === null && right === null) diff = 0;
+      else if (left === null) diff = 1;
+      else if (right === null) diff = -1;
+      else diff = right - left;
+    }
+    return diff || a.index - b.index;
+  });
+  let shown = 0;
+  rows.forEach(({ row }) => {
+    const haystack = [
+      row.dataset.title,
+      row.dataset.filename,
+      row.dataset.role,
+      row.dataset.aliases,
+      row.dataset.warning,
+    ]
+      .join(" ")
+      .toLocaleLowerCase();
+    const match = !query || haystack.includes(query);
+    row.hidden = !match;
+    if (match) shown += 1;
+    list.append(row);
+  });
+  if (count) {
+    count.hidden = !query;
+    count.textContent = shown + " of " + rows.length;
+  }
+  if (empty) empty.hidden = shown !== 0;
+}
+
+function rememberModelQuery(form) {
+  const tools = document.querySelector("[data-model-tools]");
+  if (!tools || !form.elements.q || !form.elements.sort) return;
+  const filter = tools.querySelector("[data-model-filter]");
+  const sort = tools.querySelector("[data-model-sort]");
+  form.elements.q.value = filter ? filter.value : "";
+  form.elements.sort.value = sort ? sort.value : "";
+}
+
+function writeModelQuery() {
+  const tools = document.querySelector("[data-model-tools]");
+  if (!tools) return;
+  const filter = tools.querySelector("[data-model-filter]");
+  const sort = tools.querySelector("[data-model-sort]");
+  const params = new URLSearchParams(window.location.search);
+  const query = filter.value.trim();
+  const mode = sort.value;
+  if (query) params.set("q", query);
+  else params.delete("q");
+  if (mode && mode !== "newest") params.set("sort", mode);
+  else params.delete("sort");
+  const text = params.toString();
+  const next =
+    window.location.pathname + (text ? "?" + text : "") + window.location.hash;
+  const current =
+    window.location.pathname + window.location.search + window.location.hash;
+  if (next !== current) window.history.replaceState(null, "", next);
+}
+
+const modelTools = document.querySelector("[data-model-tools]");
+if (modelTools) {
+  const filter = modelTools.querySelector("[data-model-filter]");
+  const sort = modelTools.querySelector("[data-model-sort]");
+  const params = new URLSearchParams(window.location.search);
+  if (filter && params.get("q")) filter.value = params.get("q");
+  if (sort && MODEL_SORTS.has(params.get("sort"))) sort.value = params.get("sort");
+  applyModelList();
+  filter.addEventListener("input", () => {
+    applyModelList();
+    writeModelQuery();
+  });
+  sort.addEventListener("change", () => {
+    applyModelList();
+    writeModelQuery();
+  });
+}
+
+document.querySelectorAll("form.rename-form").forEach((form) => {
+  form.addEventListener("submit", (event) => {
+    rememberModelQuery(form);
+    const file = form.elements.filename;
+    if (!file) return;
+    const nextName = checkpointName(file.value);
+    const previous = checkpointName(file.defaultValue);
+    if (!nextName || nextName === previous) return;
+    const message =
+      "Rename the file to " +
+      nextName +
+      "? Links inside models/ that point at it are updated. A command that still uses the old path will miss it.";
+    if (!window.confirm(message)) event.preventDefault();
+  });
+});

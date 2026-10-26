@@ -7,9 +7,40 @@
     <p>One row per checkpoint. The scores are the ones stored in the file. The default link is <code>models/resnext50_metal_plastic.pt</code>.</p>
   </div>
   {% if models %}
-    <ul class="model-list">
+    <div class="filters model-tools" data-model-tools>
+      <label>
+        Filter
+        <input type="search" data-model-filter placeholder="Name, file, or note" autocomplete="off">
+      </label>
+      <label>
+        Sort
+        <select data-model-sort>
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="name">Name</option>
+          <option value="name-desc">Name, Z–A</option>
+          <option value="balanced">Balanced accuracy</option>
+          <option value="validation">Validation accuracy</option>
+          <option value="test">Test accuracy</option>
+          <option value="size">Size</option>
+        </select>
+      </label>
+      <p class="hint" data-model-count hidden></p>
+    </div>
+    <ul class="model-list" data-model-list>
       {% for model in models %}
-        <li>
+        <li
+          data-title="{{ model.title }}"
+          data-filename="{{ model.filename }}"
+          data-role="{{ model.role }}"
+          data-aliases="{{ model.aliases|join(' ') }}"
+          data-warning="{{ model.warning }}"
+          data-mtime="{{ model.mtime }}"
+          data-size="{{ model.size }}"
+          data-validation="{{ model.metrics.validation if model.metrics.validation is not none else '' }}"
+          data-balanced="{{ model.metrics.balanced if model.metrics.balanced is not none else '' }}"
+          data-test="{{ model.metrics.test if model.metrics.test is not none else '' }}"
+        >
           <a href="{{ url_for('model_page', stem=model.stem) }}" title="{{ model.filename }}">{{ model.title }}</a>
           <p class="meta"><code>{{ model.filename }}</code> · {{ model.mtime_label }} · {{ model.size_label }}{% if model.default %} · default{% endif %}{% if model.frozen %} · hold &lt; {{ model.threshold }}{% endif %}</p>
           <p class="hint">{{ model.role }}</p>
@@ -27,9 +58,19 @@
           {% if model.metrics.error %}
             <p class="hint">{{ model.metrics.error }}</p>
           {% endif %}
+          <div class="row-actions">
+            <details class="rename">
+              <summary>Rename</summary>
+              {% with next='models' %}{% include "_rename.html" %}{% endwith %}
+            </details>
+            <form method="post" action="{{ url_for('delete_model', stem=model.stem) }}" class="inline-form" data-confirm="Delete {{ model.filename }} from models? This cannot be undone.">
+              <button class="ghost">Delete</button>
+            </form>
+          </div>
         </li>
       {% endfor %}
     </ul>
+    <p class="hint" data-model-empty hidden>No checkpoint matches that filter.</p>
   {% else %}
     <p>No checkpoints in <code>models/</code>. The weights stay on the machine that trained them.{% if others %} The figures from a saved run are listed below.{% endif %}</p>
   {% endif %}

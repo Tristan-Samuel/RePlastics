@@ -3,5 +3,5 @@
 {% block body %}
   <h1>That did not start</h1>
   <p>{{ message }}</p>
-  <p><a href="{{ url_for('jobs_page') }}">Back to jobs</a></p>
+  <p><a href="{{ back_url or url_for('jobs_page') }}">{{ back_label or "Back to jobs" }}</a></p>
 {% endblock %}

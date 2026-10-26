@@ -570,6 +570,14 @@ pre, .command {
   margin: 0.5rem 0 1rem;
 }
 
+.model-tools {
+  align-items: end;
+}
+
+.model-tools label { min-width: 14rem; }
+
+.model-tools .hint { margin: 0 0 0.45rem; }
+
 .size-field {
   display: flex;
   flex-direction: column;
@@ -759,6 +767,51 @@ details summary { cursor: pointer; }
 .link-list { padding-left: 1.1rem; }
 
 .inline-form { display: inline-block; margin-top: 0.5rem; }
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  align-items: center;
+  margin-top: 0.45rem;
+}
+
+.row-actions .inline-form { margin-top: 0; }
+
+.model-list details.rename,
+.panel details.rename {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+details.rename summary {
+  color: var(--muted);
+  list-style: none;
+}
+
+details.rename summary::-webkit-details-marker { display: none; }
+
+details.rename summary::marker { content: ""; }
+
+details.rename summary:hover { color: var(--accent); }
+
+.rename-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 0.8rem;
+  align-items: end;
+  margin-top: 0.65rem;
+}
+
+.rename-form label { flex: 1; min-width: 12rem; }
+
+.rename-form label.file { flex: 2; min-width: 18rem; }
+
+.rename-note {
+  flex-basis: 100%;
+  margin: 0;
+}
 
 .band { margin-top: 1rem; }
 

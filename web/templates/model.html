@@ -4,7 +4,6 @@
 {% block watch %}yes{% endblock %}
 {% block body %}
   {% set run = page.run %}
-  {% set show_decide = page.has_scores or page.show_uncertain %}
   {% set default_tab = 'overview' %}
   <header class="model-head">
     <div>
@@ -22,14 +21,11 @@
 
   <div class="tabs" role="tablist" data-tabs data-default-tab="{{ default_tab }}">
     <button type="button" role="tab" data-tab="overview" aria-selected="{{ 'true' if default_tab == 'overview' else 'false' }}">Overview</button>
-    {% if show_decide %}
-      <button type="button" role="tab" data-tab="decide" aria-selected="{{ 'true' if default_tab == 'decide' else 'false' }}">Decide</button>
-    {% endif %}
+    <button type="button" role="tab" data-tab="decide" aria-selected="{{ 'true' if default_tab == 'decide' else 'false' }}">Decide</button>
     <button type="button" role="tab" data-tab="run" aria-selected="false">Run</button>
   </div>
 
-  {% if show_decide %}
-    <div data-panel="decide" {% if default_tab != 'decide' %}hidden{% endif %}>
+  <div data-panel="decide" {% if default_tab != 'decide' %}hidden{% endif %}>
       {% if page.runs|length > 1 %}
         <form method="get" action="#decide" class="picker">
           <label>
@@ -65,7 +61,11 @@
               <p class="meta">Scores from <code>{{ page.confidence.folder.label }}</code></p>
             {% endif %}
           </div>
-          <p class="hint">Frames under the cutoff are held as uncertain. Drag the cutoff to see what would be sorted. This does not change the frozen rule.</p>
+          {% if model.frozen %}
+            <p class="hint">Frames under the cutoff are held as uncertain. Drag the cutoff to see what would be sorted. This does not change the frozen rule.</p>
+          {% else %}
+            <p class="hint">Frames under the cutoff are held as uncertain. Drag the cutoff to see what would be sorted. The slider previews these scores.</p>
+          {% endif %}
 
           <div class="metrics" data-figures>
             <div class="metric warn" data-fig="held">
@@ -229,7 +229,11 @@
       {% else %}
         <section class="panel">
           <h2>Uncertain hold</h2>
-          <p>This job has no confidence report. Pick another job above, or run one. A report does not change the frozen cutoff.</p>
+          {% if model.frozen %}
+            <p>This job has no confidence report. Pick another job above, or run one. A report does not change the frozen cutoff.</p>
+          {% else %}
+            <p>This checkpoint has no confidence scores yet. Run a report to see which frames a cutoff would hold.</p>
+          {% endif %}
           {% if page.confidence and page.confidence.sweep %}
             <div class="sweep">
               <table>
@@ -294,18 +298,18 @@
             <form method="post" action="{{ url_for('start_job') }}">
               <input type="hidden" name="kind" value="confidence">
               <input type="hidden" name="model" value="{{ model.rel }}">
-              <input type="hidden" name="data_dir" value="data_belt_stage1">
+              <input type="hidden" name="data_dir" value="{{ default_data }}">
               <button>New confidence report</button>
             </form>
           </div>
         </section>
       {% endif %}
     </div>
-  {% endif %}
 
   <div data-panel="overview" {% if default_tab != 'overview' %}hidden{% endif %}>
     <section class="panel">
       <p><code>{{ model.rel }}</code></p>
+      {% include "_rename.html" %}
       {% if model.aliases %}
         <p class="aliases">Also
           {% for name in model.aliases %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
@@ -316,6 +320,9 @@
       {% else %}
         <p class="hint">This checkpoint has no frozen hold. A blank threshold on Run leaves every frame on its winning class.</p>
       {% endif %}
+      <form method="post" action="{{ url_for('delete_model', stem=model.stem) }}" class="inline-form" data-confirm="Delete {{ model.filename }} from models? This cannot be undone.">
+        <button class="ghost">Delete checkpoint</button>
+      </form>
       {% if model.metrics.error %}
         <p class="hint">{{ model.metrics.error }}</p>
       {% endif %}
@@ -490,7 +497,7 @@
         </fieldset>
         <label class="span-2">
           Threshold override
-          <input name="threshold" inputmode="decimal" placeholder="blank keeps the frozen hold">
+          <input name="threshold" inputmode="decimal" placeholder="{% if model.frozen %}blank keeps the frozen hold{% else %}blank keeps the winning class{% endif %}">
         </label>
         <div class="span-2 buttons">
           <button name="kind" value="eval">Run eval</button>
@@ -498,31 +505,29 @@
           <button name="kind" value="mistakes">Mistakes only</button>
         </div>
       </form>
-      <p class="hint">Eval and analytics write under <code>analysis/{{ model.stem }}/</code>. A blank threshold keeps the belt stage 1 hold.</p>
-      {% if page.show_uncertain %}
-        <div class="buttons">
-          <form method="post" action="{{ url_for('start_job') }}">
+      <p class="hint">Eval and analytics write under <code>analysis/{{ model.stem }}/</code>. {% if model.frozen %}A blank threshold keeps the belt stage 1 hold.{% else %}A blank threshold leaves every frame on its winning class.{% endif %}</p>
+      <div class="buttons">
+        <form method="post" action="{{ url_for('start_job') }}">
+          <input type="hidden" name="kind" value="confidence">
+          <input type="hidden" name="model" value="{{ model.rel }}">
+          <input type="hidden" name="data_dir" value="{{ default_data }}">
+          <button>New confidence report</button>
+        </form>
+        {% if page.confidence and page.confidence.folder and page.confidence.has_test_record %}
+          <form
+            method="post"
+            action="{{ url_for('start_job') }}"
+            data-confirm="This scores the locked test split again. Continue?"
+          >
             <input type="hidden" name="kind" value="confidence">
+            <input type="hidden" name="rerun" value="yes">
+            <input type="hidden" name="out" value="{{ page.confidence.folder.rel }}">
             <input type="hidden" name="model" value="{{ model.rel }}">
             <input type="hidden" name="data_dir" value="data_belt_stage1">
-            <button>New confidence report</button>
+            <button>Rescore test</button>
           </form>
-          {% if page.confidence and page.confidence.folder and page.confidence.has_test_record %}
-            <form
-              method="post"
-              action="{{ url_for('start_job') }}"
-              data-confirm="This scores the locked test split again. Continue?"
-            >
-              <input type="hidden" name="kind" value="confidence">
-              <input type="hidden" name="rerun" value="yes">
-              <input type="hidden" name="out" value="{{ page.confidence.folder.rel }}">
-              <input type="hidden" name="model" value="{{ model.rel }}">
-              <input type="hidden" name="data_dir" value="data_belt_stage1">
-              <button>Rescore test</button>
-            </form>
-          {% endif %}
-        </div>
-      {% endif %}
+        {% endif %}
+      </div>
       {% if page.eval_log %}
         <h3>{{ page.eval_log.name }}</h3>
         <pre class="report">{{ page.eval_log.text }}</pre>

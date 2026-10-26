@@ -1,7 +1,10 @@
 """Checkpoints, saved analysis folders, and the files inside them."""
 
 import csv
+import json
+import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -16,7 +19,17 @@ from decide import (
 from preprocess import RESIN_ALIASES, resin_from_path
 
 from web.markdown import section, to_html
-from web.paths import BELT_ZIP, DATA_ROOTS, IMAGE_SUFFIXES, RESINS, ROOT
+from web.paths import (
+    BELT_ZIP,
+    DATA_ROOTS,
+    IMAGE_SUFFIXES,
+    RESINS,
+    ROOT,
+    is_relative_inside,
+)
+
+_NAMES_LOCK = threading.RLock()
+_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,180}\.pt\Z")
 
 LEGACY_RUNS = {
     "resnext50_metal_plastic_belt_stage1_layer4.pt": (
@@ -45,20 +58,29 @@ _MISTAKE_LINE = re.compile(
 _LAYER = re.compile(r"_layer([1-4])$")
 
 
-def list_models():
+def _checkpoint_paths():
     models_dir = ROOT / "models"
     if not models_dir.is_dir():
-        return []
+        return [], {}
     aliases = {}
     files = []
     for path in sorted(models_dir.rglob("*.pt")):
         if path.is_symlink():
-            aliases.setdefault(path.resolve(), []).append(
+            try:
+                target = path.resolve()
+            except (OSError, RuntimeError):
+                continue
+            aliases.setdefault(target, []).append(
                 path.relative_to(models_dir).as_posix()
             )
             continue
         if path.is_file():
             files.append(path)
+    return files, aliases
+
+
+def list_models():
+    files, aliases = _checkpoint_paths()
     models = [_model_record(path, aliases.get(path.resolve(), [])) for path in files]
     models.sort(key=lambda item: (not item["frozen"], -item["mtime"]))
     return models
@@ -69,6 +91,35 @@ def model_by_stem(stem):
         if model["stem"] == stem:
             return model
     return None
+
+
+def delete_model(stem):
+    """Remove one checkpoint file inside models/, and links that pointed at it."""
+    model = model_by_stem(stem)
+    if model is None:
+        raise FileNotFoundError(stem)
+    path = ROOT / model["rel"]
+    if path.is_symlink() or not path.is_file():
+        raise FileNotFoundError(stem)
+    resolved = path.resolve()
+    models = (ROOT / "models").resolve()
+    if not is_relative_inside(resolved, models):
+        raise FileNotFoundError(stem)
+    for candidate in models.rglob("*"):
+        if not candidate.is_symlink():
+            continue
+        try:
+            points_here = candidate.resolve() == resolved
+        except (OSError, RuntimeError):
+            continue
+        if points_here:
+            candidate.unlink()
+    path.unlink()
+    try:
+        _forget_name(model["rel"])
+    except ValueError:
+        pass
+    return model
 
 
 def belt_zip_info():
@@ -443,7 +494,9 @@ def present_data_roots():
 def runs_for(model):
     found = []
     seen = set()
-    for rel in LEGACY_RUNS.get(model["filename"], ()):
+    rels = list(LEGACY_RUNS.get(model["filename"], ()))
+    rels.extend(_legacy_dirs(model))
+    for rel in rels:
         path = ROOT / rel
         if path.is_dir() and path.resolve() not in seen:
             found.append(path)
@@ -494,7 +547,6 @@ def page_for_model(model, run_rel, confidence_rel):
         "confidence": confidence,
         "confidence_choice": confidence_choice,
         "eval_log": eval_log,
-        "show_uncertain": model["frozen"] or selected_confidence is not None,
         "has_scores": _logits_present(selected_confidence),
     }
 
@@ -679,9 +731,9 @@ def load_confidence(brief):
     return payload
 
 
-# Display names. The filename stays what train.py and decide.py already use.
-# expect_balanced is the 5 Oct layer4 score; a different number means this
-# file is no longer that model.
+# Display names. models/names.json wins when the Models page has renamed
+# a checkpoint. expect_balanced is the 5 Oct layer4 score; a different
+# number means this file is no longer that model.
 _KNOWN = {
     "resnext50_metal_plastic_belt_stage1_layer4.pt": {
         "title": "5 Oct layer4, current default",
@@ -744,12 +796,378 @@ def _fallback_title(filename):
     return stem.replace("_", " ")
 
 
-def _describe(filename, meta):
+def _automatic_title(filename):
     known = _KNOWN.get(filename, {})
-    title = known.get("title") or _fallback_title(filename)
-    role = known.get("role") or "Checkpoint stored on this computer."
+    return known.get("title") or _fallback_title(filename)
+
+
+def _names_path():
+    return ROOT / "models" / "names.json"
+
+
+def _read_names():
+    path = _names_path()
+    if not path.is_file():
+        return {"models": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("models/names.json could not be read.") from exc
+    if not isinstance(data, dict):
+        raise ValueError("models/names.json could not be read.")
+    models = data.get("models") or {}
+    if not isinstance(models, dict):
+        raise ValueError("models/names.json could not be read.")
+    return {"models": models}
+
+
+def _write_names(data):
+    path = _names_path()
+    models = {}
+    for rel, entry in data.get("models", {}).items():
+        if not isinstance(rel, str):
+            continue
+        clean = _clean_entry(entry)
+        if clean:
+            models[rel] = clean
+    if not models:
+        if path.is_file():
+            path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"models": models}, indent=2, ensure_ascii=False) + "\n"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _safe_legacy(items):
+    if not isinstance(items, list):
+        return []
+    analysis = (ROOT / "analysis").resolve()
+    safe = []
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        text = item.replace("\\", "/").strip()
+        if not text or text.startswith("/") or ".." in Path(text).parts:
+            continue
+        path = (ROOT / text).resolve()
+        if is_relative_inside(path, analysis) and text not in safe:
+            safe.append(text)
+    return safe
+
+
+def _clean_entry(entry):
+    if not isinstance(entry, dict):
+        return {}
+    clean = {}
+    title = entry.get("title")
+    if isinstance(title, str) and title.strip():
+        clean["title"] = " ".join(title.split())
+    role = entry.get("role")
+    if isinstance(role, str) and role.strip():
+        clean["role"] = role.strip()
+    expected = entry.get("expect_balanced")
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        clean["expect_balanced"] = float(expected)
+    legacy = _safe_legacy(entry.get("legacy") or [])
+    if legacy:
+        clean["legacy"] = legacy
+    return clean
+
+
+def _catalog_entry(rel):
+    try:
+        with _NAMES_LOCK:
+            models = _read_names()["models"]
+    except ValueError:
+        return {}
+    entry = models.get(rel) or {}
+    return entry if isinstance(entry, dict) else {}
+
+
+def _legacy_dirs(model):
+    return _safe_legacy(_catalog_entry(model["rel"]).get("legacy") or [])
+
+
+def _forget_name(rel):
+    with _NAMES_LOCK:
+        data = _read_names()
+        if rel not in data["models"]:
+            return
+        data["models"].pop(rel, None)
+        _write_names(data)
+
+
+def _replace_entry(old_rel, new_rel, entry):
+    with _NAMES_LOCK:
+        data = _read_names()
+        if old_rel != new_rel:
+            data["models"].pop(old_rel, None)
+        clean = _clean_entry(entry)
+        if clean:
+            data["models"][new_rel] = clean
+        else:
+            data["models"].pop(new_rel, None)
+        _write_names(data)
+
+
+def _normalize_title(value):
+    title = " ".join((value or "").split())
+    if not title:
+        raise ValueError("Name cannot be blank.")
+    if len(title) > 120:
+        raise ValueError("Name has to be 120 characters or shorter.")
+    return title
+
+
+def _normalize_filename(value):
+    name = (value or "").strip()
+    if (
+        not name
+        or "/" in name
+        or "\\" in name
+        or name in {".", ".."}
+        or Path(name).name != name
+    ):
+        raise ValueError("File name has to be a single name, with no folders.")
+    if name.lower().endswith(".pt"):
+        name = name[:-3] + ".pt"
+    else:
+        name += ".pt"
+    if not _FILE_NAME.fullmatch(name):
+        raise ValueError(
+            "File name has to start with a letter or number and use only "
+            "letters, numbers, dots, dashes, and underscores."
+        )
+    return name
+
+
+def _title_to_store(filename, submitted, edited, had_label):
+    if submitted == _automatic_title(filename):
+        return None
+    if not edited and not had_label:
+        return None
+    return submitted
+
+
+def _carried_entry(old_filename, old_entry, stored_title):
+    entry = dict(old_entry)
+    known = _KNOWN.get(old_filename, {})
+    if "role" not in entry and known.get("role"):
+        entry["role"] = known["role"]
+    if "expect_balanced" not in entry and known.get("expect_balanced") is not None:
+        entry["expect_balanced"] = float(known["expect_balanced"])
+    legacy = list(entry.get("legacy") or [])
+    for rel in LEGACY_RUNS.get(old_filename, ()):
+        if rel not in legacy:
+            legacy.append(rel)
+    if legacy:
+        entry["legacy"] = legacy
+    else:
+        entry.pop("legacy", None)
+    if stored_title:
+        entry["title"] = stored_title
+    else:
+        entry.pop("title", None)
+    return entry
+
+
+def _links_to(resolved):
+    models = (ROOT / "models").resolve()
+    found = []
+    if not models.is_dir():
+        return found
+    for candidate in models.rglob("*"):
+        if not candidate.is_symlink():
+            continue
+        try:
+            points = candidate.resolve()
+        except (OSError, RuntimeError):
+            continue
+        if points == resolved:
+            found.append(candidate)
+    return found
+
+
+def _retarget_links(links, target):
+    for link in links:
+        if not link.is_symlink():
+            continue
+        relative = Path(os.path.relpath(target, start=link.parent))
+        link.unlink()
+        link.symlink_to(relative)
+
+
+def _companion_pairs(old_path, new_path):
+    old_onnx = old_path.with_suffix(".onnx")
+    new_onnx = new_path.with_suffix(".onnx")
+    pairs = (
+        (old_onnx, new_onnx),
+        (
+            old_onnx.parent / (old_onnx.name + ".json"),
+            new_onnx.parent / (new_onnx.name + ".json"),
+        ),
+    )
+    return [(src, dst) for src, dst in pairs if src.is_file() and not src.is_symlink()]
+
+
+def _same_file(left, right):
+    try:
+        return left.exists() and right.exists() and left.samefile(right)
+    except OSError:
+        return False
+
+
+def _needs_move(src, dst):
+    if src.name != dst.name:
+        return True
+    return not _same_file(src, dst)
+
+
+def _move_pairs(pairs):
+    moved = []
+    try:
+        for src, dst in pairs:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            src.rename(dst)
+            moved.append((dst, src))
+    except OSError as exc:
+        for dst, src in reversed(moved):
+            try:
+                dst.rename(src)
+            except OSError:
+                pass
+        raise ValueError("Could not rename that checkpoint.") from exc
+    return moved
+
+
+def _rollback_pairs(moved):
+    for dst, src in reversed(moved):
+        try:
+            if dst.exists() or dst.is_symlink():
+                dst.rename(src)
+        except OSError:
+            pass
+
+
+def _rename_checkpoint(model, new_filename):
+    old_path = ROOT / model["rel"]
+    if old_path.is_symlink() or not old_path.is_file():
+        raise FileNotFoundError(model["stem"])
+    new_path = old_path.parent / new_filename
+    models = (ROOT / "models").resolve()
+    if not is_relative_inside(new_path, models):
+        raise ValueError("File name has to stay inside models.")
+    if new_path.is_symlink():
+        raise ValueError(f"{new_filename} is a link. Pick another file name.")
+    if new_path.exists() and not _same_file(old_path, new_path):
+        raise ValueError(f"{new_filename} is already in models.")
+    files, _aliases = _checkpoint_paths()
+    for path in files:
+        if _same_file(path, old_path):
+            continue
+        if path.stem.lower() == new_path.stem.lower():
+            raise ValueError("Another checkpoint already uses that name.")
+
+    pairs = []
+    if _needs_move(old_path, new_path):
+        pairs.append((old_path, new_path))
+    for src, dst in _companion_pairs(old_path, new_path):
+        if dst.is_symlink():
+            raise ValueError(f"{dst.name} is a link. Pick another file name.")
+        if dst.exists() and not _same_file(src, dst):
+            raise ValueError(f"{dst.name} is already next to that name.")
+        if _needs_move(src, dst):
+            pairs.append((src, dst))
+
+    old_analysis = ROOT / "analysis" / old_path.stem
+    new_analysis = ROOT / "analysis" / new_path.stem
+    if old_analysis.is_dir() and not old_analysis.is_symlink():
+        if new_analysis.is_symlink():
+            raise ValueError(f"analysis/{new_path.stem} is a link.")
+        if new_analysis.exists() and not _same_file(old_analysis, new_analysis):
+            raise ValueError(f"analysis/{new_path.stem} already exists.")
+        if _needs_move(old_analysis, new_analysis):
+            pairs.append((old_analysis, new_analysis))
+
+    links = _links_to(old_path.resolve())
+    moved = _move_pairs(pairs)
+    try:
+        _retarget_links(links, new_path)
+    except OSError as exc:
+        _rollback_pairs(moved)
+        raise ValueError("Could not update a link to that checkpoint.") from exc
+    return new_path.relative_to(ROOT).as_posix(), moved, links, old_path
+
+
+def rename_model(stem, filename, title):
+    """Set the label, and rename the checkpoint when the file name changes.
+
+    A new file name stays in the same folder. Links inside models/ that
+    pointed at the old file are retargeted. The ONNX pair beside it and
+    analysis/<stem>/ move with it. models/names.json keeps the label and
+    any carried note so a known checkpoint does not lose its description.
+    """
+    model = model_by_stem(stem)
+    if model is None:
+        raise FileNotFoundError(stem)
+    new_filename = _normalize_filename(filename)
+    new_title = _normalize_title(title)
+    file_changes = new_filename != model["filename"]
+    if new_title == model["title"] and not file_changes:
+        return model
+    with _NAMES_LOCK:
+        _read_names()
+        old_entry = _clean_entry(_catalog_entry(model["rel"]))
+        had_label = (
+            "title" in old_entry
+            or model["filename"] in _KNOWN
+            or model["title"] != _automatic_title(model["filename"])
+        )
+        stored_name = new_filename if file_changes else model["filename"]
+        stored = _title_to_store(
+            stored_name,
+            new_title,
+            new_title != model["title"],
+            had_label,
+        )
+        if file_changes:
+            new_rel, moved, links, old_path = _rename_checkpoint(model, new_filename)
+            entry = _carried_entry(model["filename"], old_entry, stored)
+            try:
+                _replace_entry(model["rel"], new_rel, entry)
+            except Exception as exc:
+                try:
+                    _rollback_pairs(moved)
+                    _retarget_links(links, old_path)
+                except OSError:
+                    pass
+                if isinstance(exc, ValueError):
+                    raise
+                raise ValueError("Could not save the new name.") from exc
+        else:
+            entry = dict(old_entry)
+            if stored:
+                entry["title"] = stored
+            else:
+                entry.pop("title", None)
+            _replace_entry(model["rel"], model["rel"], entry)
+    stem_out = Path(new_filename).stem if file_changes else model["stem"]
+    updated = model_by_stem(stem_out)
+    if updated is None:
+        raise FileNotFoundError(stem_out)
+    return updated
+
+
+def _describe(filename, meta, rel):
+    known = _KNOWN.get(filename, {})
+    entry = _clean_entry(_catalog_entry(rel))
+    title = entry.get("title") or known.get("title") or _fallback_title(filename)
+    role = entry.get("role") or known.get("role") or "Checkpoint stored on this computer."
     warning = ""
-    expected = known.get("expect_balanced")
+    expected = entry.get("expect_balanced", known.get("expect_balanced"))
     balanced = meta.get("balanced")
     if expected is not None and balanced is not None and abs(balanced - expected) > 0.005:
         warning = (
@@ -763,7 +1181,8 @@ def _model_record(path, alias_names):
     stat = path.stat()
     meta = _checkpoint_meta(path)
     frozen = frozen_rule_applies(path)
-    title, role, warning = _describe(path.name, meta)
+    rel = path.relative_to(ROOT).as_posix()
+    title, role, warning = _describe(path.name, meta, rel)
     default = "resnext50_metal_plastic.pt" in alias_names
     option = (
         f"{title} · balanced {_pct(meta.get('balanced'))}"
@@ -811,7 +1230,7 @@ def _checkpoint_meta(path):
             "test": _as_float(blob.get("test_accuracy")),
         }
         del blob
-    except (OSError, RuntimeError, ValueError, KeyError):
+    except Exception:
         meta["error"] = "Could not read checkpoint metrics."
     _META[key] = meta
     return meta
