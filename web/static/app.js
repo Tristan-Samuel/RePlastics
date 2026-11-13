@@ -40,6 +40,31 @@ window.labResin = {
   color: resinColor,
 };
 
+function fileResin(frame) {
+  if (!frame) return "";
+  if (frame.true_resin) return frame.true_resin;
+  if (frame.trueResin) return frame.trueResin;
+  const fromPath = resinFromPath(frame.path);
+  if (fromPath) return fromPath;
+  if (frame.score !== undefined && frame.confidence === undefined && frame.resin) return frame.resin;
+  return "";
+}
+
+function trueLabel(frame) {
+  const folder = (frame && frame.true) || "";
+  const resin = fileResin(frame);
+  const named = resin && resin !== "unknown" && resin !== "OTHERS" && RESIN_COLORS[resin];
+  if (folder === "plastic" && named) return "plastic · " + resin;
+  if (!folder && named) return resin;
+  return folder || (named ? resin : "") || "unlabeled";
+}
+
+function isMetalPhoto(frame) {
+  if (!frame) return false;
+  if (frame.true === "metal") return true;
+  return fileResin(frame) === "OTHERS";
+}
+
 const log = document.querySelector("#log");
 const logBody = document.querySelector("#log-body");
 const logToggle = document.querySelector("#log-toggle");
@@ -444,6 +469,7 @@ if (decide) {
   const rangeMax = decide.querySelector("[data-range-max]");
   const classFilter = decide.querySelector("[data-decide-class]");
   const resinFilter = decide.querySelector("[data-decide-resin]");
+  const hideMetalInput = decide.querySelector("[data-hide-metal]");
   const excludedButton = decide.querySelector('[data-split-value="excluded"]');
   let frames = [];
   let split = "validation";
@@ -676,8 +702,9 @@ if (decide) {
   });
 
   function caption(frame, showSplit) {
-    const bits = [frame.true + " → " + frame.pred, percent(frame.score)];
-    if (frame.resin && frame.resin !== "unknown") bits.push(frame.resin);
+    const truth = trueLabel(frame);
+    const bits = [truth + " → " + (frame.pred || "—"), percent(frame.score)];
+    if (frame.resin && frame.resin !== "unknown" && truth.indexOf(frame.resin) === -1) bits.push(frame.resin);
     if (showSplit) bits.push(frame.split);
     return bits.join(" · ");
   }
@@ -690,7 +717,9 @@ if (decide) {
 
   function shortCall(frame) {
     const mark = { metal: "M", plastic: "P", HDPE: "HDPE", PET: "PET", PP: "PP", OTHERS: "OTH" };
-    const left = mark[frame.true] || frame.true || "?";
+    const resin = fileResin(frame);
+    let left = mark[frame.true] || frame.true || "?";
+    if (frame.true === "plastic" && resin && resin !== "OTHERS" && mark[resin]) left = "P·" + mark[resin];
     const right = mark[frame.pred] || frame.pred || "?";
     return left + "→" + right;
   }
@@ -835,7 +864,10 @@ if (decide) {
   }
 
   function render() {
-    const rows = activeFrames();
+    let rows = activeFrames();
+    if (hideMetalInput && hideMetalInput.checked) {
+      rows = rows.filter((frame) => !isMetalPhoto(frame));
+    }
     const threshold = snapThreshold(thresholdInput.value);
     shownThreshold = threshold;
     const viewMin = snapRange(rangeMin.value);
@@ -1080,6 +1112,7 @@ if (decide) {
   rangeMax.addEventListener("input", () => keepRangeOrdered(rangeMax));
   classFilter.addEventListener("change", render);
   resinFilter.addEventListener("change", render);
+  if (hideMetalInput) hideMetalInput.addEventListener("change", render);
   decide.querySelectorAll("[data-split-value]").forEach((button) => {
     button.addEventListener("click", () => {
       split = button.dataset.splitValue;
@@ -1577,6 +1610,7 @@ if (openSet) {
   let pointer = null;
   let hoverKey = "";
   const scatterTip = openSet.querySelector("[data-scatter-tip]");
+  const hideMetalInput = openSet.querySelector("[data-hide-metal]");
   const zoomNote = openSet.querySelector("[data-zoom-note]");
   const listMore = openSet.querySelector("[data-list-more]");
 
@@ -1667,6 +1701,7 @@ if (openSet) {
 
   function visibleFrames() {
     return frames.filter((frame) => {
+      if (hideMetalInput && hideMetalInput.checked && isMetalPhoto(frame)) return false;
       if (split === "both") return frame.split === "validation" || frame.split === "test";
       return frame.split === split;
     });
@@ -1690,8 +1725,16 @@ if (openSet) {
   }
 
   function isRight(frame) {
-    const truth = truthKey(frame);
     const call = callKey(frame);
+    const tagged = fileResin(frame);
+    const resins = ["HDPE", "PET", "PP"];
+    if (resins.indexOf(call) !== -1) {
+      if (resins.indexOf(tagged) !== -1) return call === tagged;
+      if (tagged === "OTHERS" || frame.true === "metal") return false;
+      if (frame.true === "plastic") return true;
+      return false;
+    }
+    const truth = truthKey(frame);
     return Boolean(truth) && truth === call;
   }
 
@@ -1767,7 +1810,7 @@ if (openSet) {
       if (!known(frame)) return;
       const truth = truthKey(frame);
       const callName = callKey(frame);
-      const right = truth === callName;
+      const right = isRight(frame);
       seen.add(truth);
       stats.known += 1;
       if (!right) stats.wrong += 1;
@@ -1917,8 +1960,8 @@ if (openSet) {
     button.dataset.kind = kind;
     const truth = truthKey(frame);
     if (RESIN_COLORS[truth]) button.dataset.resin = truth;
-    const trueName = truth || frame.true || "unlabeled";
-    button.title = `${kindLabel(kind)} · true ${trueName} · ${frame.path || ""}`;
+    const trueName = trueLabel(frame);
+    button.title = `${kindLabel(kind)} · true ${trueName} · pred ${frame.resin || frame.pred || "—"} · ${frame.path || ""}`;
     const img = document.createElement("img");
     img.loading = "lazy";
     img.alt = frame.path || "photo";
@@ -1929,7 +1972,9 @@ if (openSet) {
     const shownCall = decision === "others" || decision === "uncertain"
       ? decision
       : (frame.resin || frame.pred || decision);
-    left.textContent = shownCall;
+    left.textContent = trueName && trueName !== shownCall
+      ? trueName + " → " + shownCall
+      : shownCall;
     const right = document.createElement("span");
     right.textContent = formatDistance(Number(frame[scoreKey]));
     overlay.append(left, right);
@@ -1956,8 +2001,14 @@ if (openSet) {
 
   function galleryRows() {
     const rows = [];
-    if (listSources.probe) probes.forEach((frame) => rows.push(frame));
+    const hidden = hideMetalInput && hideMetalInput.checked;
+    if (listSources.probe) {
+      probes.forEach((frame) => {
+        if (!hidden || !isMetalPhoto(frame)) rows.push(frame);
+      });
+    }
     frames.forEach((frame) => {
+      if (hidden && isMetalPhoto(frame)) return;
       if (listSources.validation && frame.split === "validation") rows.push(frame);
       if (listSources.test && frame.split === "test") rows.push(frame);
     });
@@ -2214,10 +2265,11 @@ if (openSet) {
       return;
     }
     const frame = point.frame;
-    const name = (frame.path || "photo").split("/").pop();
-    const pile = stacked.length > 1 ? ` · ${stacked.length} on this spot` : "";
+    const tagged = fileResin(frame);
+    const truth = tagged || frame.true || "unlabeled";
+    const predicted = frame.resin || frame.pred || "—";
     scatterTip.hidden = false;
-    scatterTip.textContent = `${name} · ${kindLabel(kindFor(frame))} · ${percent(frame.confidence)} · ${formatDistance(Number(frame[scoreKey]))}${pile}`;
+    scatterTip.textContent = `true ${truth} · pred ${predicted} · ${percent(frame.confidence)} · ${formatDistance(Number(frame[scoreKey]))}`;
     const wrap = canvas.parentElement.getBoundingClientRect();
     let left = event.clientX - wrap.left + 14;
     let top = event.clientY - wrap.top + 14;
@@ -2646,9 +2698,9 @@ if (openSet) {
     dialogTitle.textContent = frame.path || "Photo";
     dialogImage.src = fileUrl(frame.path);
     dialogImage.alt = frame.path || "photo";
-    const trueName = frame.true || "unlabeled";
+    const trueName = trueLabel(frame);
     dialogCaption.textContent =
-      `${call.decision}${call.rescued ? " · kept past distance" : ""} · true ${trueName} · pred ${frame.resin || frame.pred} ` +
+      `${call.decision}${call.rescued ? " · kept past distance" : ""} · true ${trueName} · pred ${frame.resin || frame.pred || "—"} ` +
       `${percent(frame.confidence)} · cloud ${formatDistance(frame.cloud)} · ` +
       `call ${formatDistance(frame.call)} · k-NN ${formatDistance(frame.knn)} · ` +
       `Mahalanobis ${formatDistance(frame.maha)}` +
@@ -2662,6 +2714,7 @@ if (openSet) {
     if (!dialog.open) dialog.showModal();
   }
 
+  if (hideMetalInput) hideMetalInput.addEventListener("change", render);
   openSet.querySelectorAll("[data-split-value]").forEach((button) => {
     button.addEventListener("click", () => {
       split = button.dataset.splitValue;

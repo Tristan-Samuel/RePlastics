@@ -4,7 +4,11 @@
 {% block body %}
   <div class="page-head">
     <h1>Open set</h1>
-    <p>A photo is <strong>others</strong> when its pooled vector sits outside the metal and plastic clouds. Low confidence inside a cloud stays <strong>uncertain</strong>. A keep line can still accept a photo once confidence is high enough, whatever the distance. This page only previews that pair. It does not change the 0.85 hold, and it is not the stage 1 OTHERS resin.</p>
+    {% if model and model.head == 'resin' %}
+      <p>A photo is <strong>others</strong> when its pooled vector sits outside the HDPE, PET, and PP clouds. Low confidence inside a cloud stays <strong>uncertain</strong>. A keep line can still accept a photo once confidence is high enough, whatever the distance. Metal and the stage 1 OTHERS tag are not a class of this head. This page does not change the 0.85 hold.</p>
+    {% else %}
+      <p>A photo is <strong>others</strong> when its pooled vector sits outside the metal and plastic clouds. Low confidence inside a cloud stays <strong>uncertain</strong>. A keep line can still accept a photo once confidence is high enough, whatever the distance. This page only previews that pair. It does not change the 0.85 hold, and it is not the stage 1 OTHERS resin.</p>
+    {% endif %}
   </div>
 
   <section class="panel">
@@ -29,7 +33,11 @@
         </label>
       </form>
       {% if model and model.head == 'resin' %}
-        <p class="hint">This checkpoint scores {{ model.classes|join(', ') }}. A photo is correct when the call matches that resin. A file with no resin label is still plastic. It has no metal class. Confidence under 0.85 is the review bucket in its metadata, which this page calls uncertain. Distance still uses the metal and plastic train photos.</p>
+        {% if brief and not brief.class_stale %}
+          <p class="hint">This checkpoint scores {{ model.classes|join(', ') }}. A tagged photo is correct when the call matches that tag. A plastic photo with no resin tag is still correct. Metal has no class here. Confidence under 0.85 is the review bucket in its metadata, which this page calls uncertain.</p>
+        {% else %}
+          <p class="hint">This checkpoint scores {{ model.classes|join(', ') }}. Rerun to fit a cloud for each resin. Until then the saved bank is still metal and plastic, and a call is stored as plastic.</p>
+        {% endif %}
       {% endif %}
       <form
         id="open-set-build"
@@ -64,6 +72,9 @@
         {% if brief.stale %}
           <p class="warn-line">This checkpoint changed after the bank was built. Rerun before scoring new photos.</p>
         {% endif %}
+        {% if brief.class_stale %}
+          <p class="warn-line">This bank is still metal and plastic. Rerun so HDPE, PET, and PP each get a cloud.</p>
+        {% endif %}
       {% else %}
         <p>No bank for this checkpoint yet. Build fits a metal centroid and a plastic centroid on train, then scores validation and test. The distance mark is the 99th percentile on validation photos the model already gets right. Test does not pick that mark.</p>
       {% endif %}
@@ -87,6 +98,10 @@
           <button type="button" data-split-value="both" aria-pressed="false">Both</button>
         </div>
         <p class="hint" data-split-note></p>
+        <label class="check">
+          <input type="checkbox" data-hide-metal>
+          Hide metal
+        </label>
       </div>
 
       <p class="hint">Each percentage is a share of this split. The count under it is the photos in that share.</p>

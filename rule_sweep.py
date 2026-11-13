@@ -26,6 +26,7 @@ from open_set import (
     labels_for,
     measure,
     probe_true_class,
+    train_for_bank,
 )
 from web.paths import IMAGE_SUFFIXES
 
@@ -363,13 +364,16 @@ def main():
                 "validation": 0,
                 "test": 0,
             }
+            fit_features, label_names, class_names = train_for_bank(
+                features, paths, idx_to_class
+            )
             bank = fit_bank(
-                features,
-                [path.parent.name for path in paths],
+                fit_features,
                 temperature,
                 args.model,
                 args.data_dir,
                 counts,
+                class_names,
             )
         measured = measure(features, logits, bank, idx_to_class)
         split_rows[split] = pack(paths, measured, logits, labels_for(paths))

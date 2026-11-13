@@ -20,7 +20,7 @@ import torch
 from sklearn.decomposition import PCA
 
 from analyze import forward_hooks
-from checkpoints import lab_class, read_checkpoint, resin_head
+from checkpoints import RESIN_HEAD, lab_class, read_checkpoint, resin_head
 from confidence_report import pick_device, split_paths
 from decide import scaled_probabilities, scoring_temperature
 from preprocess import (
@@ -191,6 +191,27 @@ def labels_for(paths):
     return names
 
 
+def train_for_bank(features, paths, idx_to_class):
+    """Rows that define the clouds.
+
+    A belt head uses every train photo, split into metal and plastic.
+    A resin head uses only HDPE, PET, and PP tags. Metal and the
+    stage 1 OTHERS tag stay out of that fit.
+    """
+    if not resin_head(idx_to_class):
+        return features, labels_for(paths), list(EXPECTED_CLASSES)
+    labels = []
+    kept = []
+    for index, path in enumerate(paths):
+        resin = resin_from_path(path)
+        if resin in RESIN_HEAD:
+            labels.append(resin)
+            kept.append(index)
+    if len(kept) < 3:
+        raise OpenSetError("Train has no HDPE, PET, or PP photos.")
+    return features[np.asarray(kept)], labels, list(RESIN_HEAD)
+
+
 def embed_and_logits(model, paths, device, split_name):
     """One forward per photo: logits plus the avgpool vector.
 
@@ -228,9 +249,9 @@ def _invert_cov(cov):
     raise OpenSetError("Covariance fit failed.")
 
 
-def fit_bank(features, label_names, temperature, model_path, data_dir, counts):
+def fit_bank(features, label_names, temperature, model_path, data_dir, counts, class_names=None):
     vectors = l2_normalize(features)
-    names = list(EXPECTED_CLASSES)
+    names = list(class_names) if class_names is not None else list(EXPECTED_CLASSES)
     centroids = []
     for name in names:
         mask = np.array([label == name for label in label_names])
@@ -360,20 +381,19 @@ def measure(features, logits, bank, idx_to_class):
         )
     head_names = set(idx_to_class.values())
     if head_names != set(bank.class_names):
-        resin_on_belt = (
-            resin_head(idx_to_class)
-            and set(bank.class_names) == set(EXPECTED_CLASSES)
+        raise OpenSetError(
+            "This checkpoint's classes do not match the bank. Build it again."
         )
-        if not resin_on_belt:
-            raise OpenSetError(
-                "This checkpoint's classes do not match the bank."
-            )
     probs = scaled_probabilities(logits, bank.temperature)
     confidence, pred_index = torch.max(probs, dim=-1)
     pred_index = pred_index.cpu().numpy()
     raw = [idx_to_class[int(index)] for index in pred_index]
-    names = [lab_class(name) for name in raw]
-    resins = raw if resin_head(idx_to_class) else [""] * len(raw)
+    if resin_head(idx_to_class):
+        names = list(raw)
+        resins = list(raw)
+    else:
+        names = [lab_class(name) for name in raw]
+        resins = [""] * len(raw)
     class_index = {name: index for index, name in enumerate(bank.class_names)}
     # float64: a float32 dot of these wide vectors warns and can go non-finite.
     dists = 1.0 - (
@@ -452,9 +472,17 @@ def _quantile(values):
 def _call_right(row):
     if row.get("true") is None:
         return False
-    if row.get("resin") and row.get("true_resin"):
-        return row["resin"] == row["true_resin"]
-    return row["pred"] == row["true"]
+    call = row.get("resin") or row.get("pred") or ""
+    if call in RESIN_HEAD:
+        true_resin = row.get("true_resin") or ""
+        if true_resin in RESIN_HEAD:
+            return call == true_resin
+        if row.get("true") == "metal" or true_resin == "OTHERS":
+            return False
+        if row.get("true") == "plastic":
+            return True
+        return False
+    return row.get("pred") == row.get("true")
 
 
 def suggestions_from(rows):
@@ -515,18 +543,37 @@ def write_report(folder, bank, frames, data_dir):
         "pca_dim": payload["pca_dim"],
         "model_mtime_ns": bank.model_mtime_ns,
         "model_size": bank.model_size,
+        "class_names": list(bank.class_names),
     }
     (folder / "meta.json").write_text(
         json.dumps(meta, indent=2) + "\n",
         encoding="utf-8",
     )
+    resin_fit = set(bank.class_names) == set(RESIN_HEAD)
     lines = [
         "# Open set",
         "",
         "Lab preview. This does not change the hold in `decide.py`.",
-        "Others here means the pooled vector sits outside the metal and",
-        "plastic clouds. It is not the stage 1 OTHERS resin.",
-        "",
+    ]
+    if resin_fit:
+        lines.extend(
+            [
+                "Others here means the pooled vector sits outside the HDPE,",
+                "PET, and PP clouds. Metal and the stage 1 OTHERS tag are",
+                "not part of this head.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "Others here means the pooled vector sits outside the metal and",
+                "plastic clouds. It is not the stage 1 OTHERS resin.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
         f"Fit on train in `{data_dir}` ({bank.counts.get('train', 0)} photos).",
         f"Temperature {bank.temperature:.6f}.",
         f"k-NN uses {bank.knn_k} neighbors. Mahalanobis uses "
@@ -536,15 +583,16 @@ def write_report(folder, bank, frames, data_dir):
         "photos the model already got right "
         f"({bank.suggestion_count}). Test did not pick it.",
         "",
-    ]
+        ]
+    )
     if any(row.get("resin") for row in frames):
         lines.extend(
             [
-                "The head is HDPE, PET, and PP. A call is correct when it",
-                "matches the resin on the photo. A photo with no resin label",
-                "is still read as plastic. This head has no metal class.",
-                "Confidence under 0.85 is their review bucket. Here that",
-                "cutoff is uncertain.",
+                "The head is HDPE, PET, and PP. A tagged photo is correct",
+                "when the call matches that tag. A plastic photo with no",
+                "resin tag is still correct when the call is HDPE, PET, or",
+                "PP. This head has no metal class. Confidence under 0.85",
+                "is their review bucket. Here that cutoff is uncertain.",
                 "",
             ]
         )
@@ -616,7 +664,9 @@ def build(model_path, data_dir, out, rerun_test):
                 features, _logits = embed_and_logits(
                     model, paths, device, split
                 )
-                label_names = labels_for(paths)
+                features, label_names, class_names = train_for_bank(
+                    features, paths, idx_to_class
+                )
                 bank = fit_bank(
                     features,
                     label_names,
@@ -624,9 +674,10 @@ def build(model_path, data_dir, out, rerun_test):
                     model_path,
                     data_dir,
                     counts,
+                    class_names,
                 )
                 print(
-                    f"Fit centroids on {len(paths)} train photos.",
+                    f"Fit centroids on {len(label_names)} train photos.",
                     flush=True,
                 )
                 continue

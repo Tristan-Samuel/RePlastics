@@ -29,8 +29,8 @@ from open_set import (
     display_path,
     embed_and_logits,
     fit_bank,
-    labels_for,
     load_bank,
+    train_for_bank,
     load_scorer,
     probe_true_class,
     save_bank,
@@ -312,6 +312,9 @@ def model_is_fresh(path, model_path, data_dir):
         return False
     if payload.get("model") != display_path(model_path):
         return False
+    classes = set(payload.get("classes") or [])
+    if classes == {"HDPE", "PET", "PP"} and set(payload.get("bank_classes") or []) != classes:
+        return False
     return _stat_match(payload, model_path)
 
 
@@ -354,7 +357,7 @@ def _class_list(idx_to_class):
     return [idx_to_class[index] for index in range(len(idx_to_class))]
 
 
-def _model_payload(model_path, data_dir, suggestions, suggestion_count, frames, classes):
+def _model_payload(model_path, data_dir, suggestions, suggestion_count, frames, classes, bank_classes):
     stat = Path(model_path).stat()
     suggestions = {
         key: None if suggestions.get(key) is None else round(float(suggestions[key]), 6)
@@ -369,6 +372,7 @@ def _model_payload(model_path, data_dir, suggestions, suggestion_count, frames, 
         "ranges": _ranges(frames, suggestions),
         "counts": _split_counts(frames),
         "classes": list(classes or []),
+        "bank_classes": list(bank_classes or []),
         "model_mtime_ns": stat.st_mtime_ns,
         "model_size": stat.st_size,
         "frames": frames,
@@ -404,6 +408,8 @@ def _reuse_open_set(folder, model_path, data_dir):
     model, device, idx_to_class, bank = load_scorer(model_path, folder)
     if not checkpoint_matches(bank, model_path):
         raise PipelineError("This checkpoint changed after the bank was built.")
+    if set(_class_list(idx_to_class)) != set(bank.class_names):
+        return None
     frames = _score_extras(model, device, idx_to_class, bank, frames)
     suggestions = payload.get("suggestions") or {}
     return _model_payload(
@@ -413,6 +419,7 @@ def _reuse_open_set(folder, model_path, data_dir):
         payload.get("suggestion_count") or 0,
         frames,
         _class_list(idx_to_class),
+        bank.class_names,
     )
 
 
@@ -430,15 +437,19 @@ def _build_model(model_path, data_dir):
     counts["train"] = len(train_paths)
     print(f"train: {len(train_paths)} photos", flush=True)
     features, _logits = embed_and_logits(model, train_paths, device, "train")
+    features, label_names, class_names = train_for_bank(
+        features, train_paths, idx_to_class
+    )
     bank = fit_bank(
         features,
-        labels_for(train_paths),
+        label_names,
         temperature,
         model_path,
         data_dir,
         counts,
+        class_names,
     )
-    print(f"Fit centroids on {len(train_paths)} train photos.", flush=True)
+    print(f"Fit centroids on {len(label_names)} train photos.", flush=True)
     for split in ("validation", "test"):
         paths = split_paths(data_dir, split)
         counts[split] = len(paths)
@@ -480,6 +491,7 @@ def _build_model(model_path, data_dir):
         bank.suggestion_count,
         frames,
         _class_list(idx_to_class),
+        bank.class_names,
     )
 
 
@@ -493,9 +505,8 @@ def build_model(model_path, data_dir, out, rerun):
         return dest
     folder = find_open_set(model_path, data_dir)
     try:
-        if folder is not None:
-            payload = _reuse_open_set(folder, model_path, data_dir)
-        else:
+        payload = _reuse_open_set(folder, model_path, data_dir) if folder is not None else None
+        if payload is None:
             payload = _build_model(model_path, data_dir)
     except OpenSetError as exc:
         raise PipelineError(str(exc)) from exc

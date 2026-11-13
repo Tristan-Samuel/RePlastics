@@ -9,7 +9,7 @@ if (root) {
   const inspector = root.querySelector("[data-inspector]");
   const flowNote = root.querySelector("[data-flow-note]");
   const figures = document.querySelector("[data-figures]");
-  const photos = document.querySelector("[data-photos]");
+  const stepsHost = document.querySelector("[data-steps]");
   const moreButton = document.querySelector("[data-list-more]");
   const listNote = document.querySelector("[data-list-note]");
   const splitNote = document.querySelector("[data-split-note]");
@@ -45,6 +45,12 @@ if (root) {
   let pending = null;
   let split = "validation";
   let portFilter = null;
+  let viewNodes = [];
+  let outcomeFilter = "all";
+  let classFilter = "any";
+  let minConfidence = 0;
+  let equalClasses = false;
+  let hideMetal = false;
   let listCap = LIST_STEP;
   let belt = null;
   let frames = [];
@@ -277,6 +283,42 @@ if (root) {
       listCap += LIST_STEP;
       paintList();
     });
+    document.querySelectorAll("[data-outcome]").forEach((button) => {
+      button.addEventListener("click", () => {
+        outcomeFilter = button.dataset.outcome;
+        document.querySelectorAll("[data-outcome]").forEach((item) => {
+          item.setAttribute("aria-pressed", item === button ? "true" : "false");
+        });
+        listCap = LIST_STEP;
+        paintList();
+      });
+    });
+    const classPick = document.querySelector("[data-class-filter]");
+    if (classPick) classPick.addEventListener("change", () => {
+      classFilter = classPick.value;
+      listCap = LIST_STEP;
+      paintList();
+    });
+    const confidencePick = document.querySelector("[data-min-confidence]");
+    if (confidencePick) confidencePick.addEventListener("change", () => {
+      const number = Number(confidencePick.value);
+      minConfidence = Number.isFinite(number) ? Math.min(1, Math.max(0, number)) : 0;
+      confidencePick.value = String(minConfidence);
+      listCap = LIST_STEP;
+      paintList();
+    });
+    const equalPick = document.querySelector("[data-equal-classes]");
+    if (equalPick) equalPick.addEventListener("change", () => {
+      equalClasses = equalPick.checked;
+      listCap = LIST_STEP;
+      paintList();
+    });
+    const metalPick = document.querySelector("[data-hide-metal]");
+    if (metalPick) metalPick.addEventListener("change", () => {
+      hideMetal = metalPick.checked;
+      listCap = LIST_STEP;
+      paintList();
+    });
     if (scoreForm) scoreForm.addEventListener("submit", onScore);
     dialog.querySelector("[data-view-close]").addEventListener("click", () => dialog.close());
     window.addEventListener("keydown", (event) => {
@@ -403,7 +445,9 @@ if (root) {
 
   function cardElement(node) {
     const card = document.createElement("article");
-    card.className = "flow-card" + (node.id === selectedId ? " selected" : "");
+    card.className = "flow-card"
+      + (node.id === selectedId ? " selected" : "")
+      + (viewNodes.indexOf(node.id) !== -1 ? " in-view" : "");
     card.dataset.node = node.id;
     card.style.left = node.x + "px";
     card.style.top = node.y + "px";
@@ -556,6 +600,8 @@ if (root) {
       y: node.y,
       cx: event.clientX,
       cy: event.clientY,
+      shift: event.shiftKey,
+      moved: false,
     };
     board.style.overflow = "hidden";
     header.setPointerCapture(event.pointerId);
@@ -563,6 +609,7 @@ if (root) {
 
   function onDrag(event) {
     if (!drag || event.pointerId !== drag.pointer) return;
+    if (Math.hypot(event.clientX - drag.cx, event.clientY - drag.cy) > 4) drag.moved = true;
     event.preventDefault();
     const node = nodeById(drag.id);
     const card = canvas.querySelector('[data-node="' + drag.id + '"]');
@@ -582,11 +629,15 @@ if (root) {
   function endDrag() {
     if (!drag) return;
     const node = nodeById(drag.id);
+    const moved = drag.moved;
+    const shift = drag.shift;
+    const id = drag.id;
     drag = null;
     board.style.overflow = "";
     if (node) {
       revealNode(node);
       selectNode(node.id);
+      if (!moved) chooseBlocks(id, shift);
     }
     saveDraft();
   }
@@ -915,7 +966,9 @@ if (root) {
     if (modelClasses(rel).indexOf("HDPE") === -1) return false;
     const payload = loaded.get(rel);
     if (!payload || !Array.isArray(payload.frames) || !payload.frames.length) return false;
-    return !payload.frames.some((frame) => frame.resin);
+    const bank = payload.bank_classes || [];
+    if (bank.indexOf("HDPE") === -1 || bank.indexOf("PET") === -1 || bank.indexOf("PP") === -1) return true;
+    return !payload.frames.some((frame) => frame.pred === "HDPE" || frame.pred === "PET" || frame.pred === "PP");
   }
 
   function sinkRoles() {
@@ -949,10 +1002,17 @@ if (root) {
 
   function callMatchesLabel(call, frame) {
     if (!call || !frame) return false;
-    if (call === frame.true) return true;
     const resin = trueResinOf(frame);
+    const resins = ["HDPE", "PET", "PP"];
+    if (resins.indexOf(call) !== -1) {
+      if (resins.indexOf(resin) !== -1) return call === resin;
+      if (resin === "OTHERS" || frame.true === "metal") return false;
+      if (frame.true === "plastic") return true;
+      return false;
+    }
+    if (call === frame.true) return true;
     if (resin && call === resin) return true;
-    if (call === "plastic" && resinLib.order.slice(0, 3).indexOf(resin) !== -1) return true;
+    if (call === "plastic" && resins.indexOf(resin) !== -1) return true;
     if (call === "metal" && resin === "OTHERS") return true;
     return false;
   }
@@ -1353,49 +1413,226 @@ if (root) {
     return (100 * count / total).toFixed(1) + "%";
   }
 
-  function paintList() {
-    if (!photos) return;
-    const rows = visibleFrames();
-    let indexes = rows.map((_, index) => index);
-    if (portFilter && outcome && outcome.ports) {
-      indexes = outcome.ports[portFilter.nodeId + ":" + portFilter.port] || [];
+  function chooseBlocks(id, shift) {
+    if (shift) {
+      const index = viewNodes.indexOf(id);
+      if (index === -1) viewNodes.push(id);
+      else viewNodes.splice(index, 1);
+    } else if (viewNodes.length === 1 && viewNodes[0] === id) {
+      viewNodes = [];
+    } else {
+      viewNodes = [id];
     }
-    const shown = indexes.slice(0, listCap);
-    photos.replaceChildren();
-    shown.forEach((index) => photos.appendChild(photoButton(rows[index], index)));
-    if (listNote) {
-      const where = portFilter
-        ? titleOf(nodeById(portFilter.nodeId)) + " · " + portFilter.port
-        : "All photos in this split";
-      listNote.textContent = where + ". " + indexes.length + " photos. Click one to see every score and the path it took.";
-    }
-    if (moreButton) moreButton.hidden = indexes.length <= shown.length;
+    listCap = LIST_STEP;
+    canvas.querySelectorAll(".flow-card").forEach((card) => {
+      card.classList.toggle("in-view", viewNodes.indexOf(card.dataset.node) !== -1);
+    });
+    paintList();
   }
 
-  function photoButton(frame, index) {
+  function stepsToShow() {
+    const order = outcome && outcome.order ? outcome.order : [];
+    const nodes = order.map((id) => nodeById(id)).filter(Boolean);
+    if (!viewNodes.length) return nodes;
+    return nodes.filter((node) => viewNodes.indexOf(node.id) !== -1);
+  }
+
+  function stepDecision(node, index) {
+    if (!outcome || !outcome.visits || !outcome.visits[index]) return "";
+    const visits = outcome.visits[index];
+    for (let cursor = visits.length - 1; cursor >= 0; cursor -= 1) {
+      if (visits[cursor].nodeId === node.id) return visits[cursor].port || "";
+    }
+    return "";
+  }
+
+  function reachedIndexes(node) {
+    if (!outcome) return [];
+    if (portFilter && portFilter.nodeId === node.id && outcome.ports) {
+      return (outcome.ports[node.id + ":" + portFilter.port] || []).slice();
+    }
+    return (outcome.arrived && outcome.arrived[node.id] ? outcome.arrived[node.id] : []).slice();
+  }
+
+  function balanceKey(node, frame, index) {
+    const decision = stepDecision(node, index);
+    if (decision === "uncertain" || decision === "others") return decision;
+    const resin = trueResinOf(frame);
+    if (resin && resin !== "OTHERS") return resin;
+    return frame.true || decision || "unknown";
+  }
+
+  function passesClass(node, frame, index) {
+    if (classFilter === "any") return true;
+    if (classFilter === "uncertain" || classFilter === "others") {
+      return stepDecision(node, index) === classFilter;
+    }
+    const resin = trueResinOf(frame);
+    if (classFilter === "plastic") {
+      return frame.true === "plastic" || ["HDPE", "PET", "PP"].indexOf(resin) !== -1;
+    }
+    if (classFilter === "metal") return frame.true === "metal" || resin === "OTHERS";
+    return resin === classFilter;
+  }
+
+  function stepIsRight(node, frame, index) {
+    const decision = stepDecision(node, index);
+    if (node.type === "belt") {
+      if (frame.true === "empty") return decision === "empty";
+      return decision !== "empty";
+    }
+    if (node.type === "sink") return callMatchesLabel(node.role || "", frame);
+    if (node.type === "input" || node.type === "merge") return true;
+    if (decision === "uncertain" || decision === "others") return false;
+    return callMatchesLabel(decision, frame);
+  }
+
+  function passesOutcome(node, frame, index) {
+    if (outcomeFilter === "all") return true;
+    if (node.type === "input" || node.type === "merge") return true;
+    const match = stepIsRight(node, frame, index);
+    return outcomeFilter === "right" ? match : !match;
+  }
+
+  function passesConfidence(node, frame) {
+    if (!(minConfidence > 0) || node.type !== "model") return true;
+    const row = node.model && frame.models ? frame.models[node.model] : null;
+    const value = row ? Number(row.confidence) : NaN;
+    return Number.isFinite(value) && value >= minConfidence;
+  }
+
+  function filteredIndexes(node, rows) {
+    const kept = [];
+    reachedIndexes(node).forEach((index) => {
+      const frame = rows[index];
+      if (!frame) return;
+      if (hideMetal && (frame.true === "metal" || trueResinOf(frame) === "OTHERS")) return;
+      if (!passesClass(node, frame, index)) return;
+      if (!passesOutcome(node, frame, index)) return;
+      if (!passesConfidence(node, frame)) return;
+      kept.push({ index, key: balanceKey(node, frame, index) });
+    });
+    if (!equalClasses) {
+      return {
+        shown: kept.slice(0, listCap).map((item) => item.index),
+        total: kept.length,
+        more: kept.length > listCap,
+      };
+    }
+    const groups = new Map();
+    kept.forEach((item) => {
+      if (!groups.has(item.key)) groups.set(item.key, []);
+      groups.get(item.key).push(item.index);
+    });
+    let smallest = Infinity;
+    groups.forEach((list) => {
+      if (list.length < smallest) smallest = list.length;
+    });
+    if (!Number.isFinite(smallest)) return { shown: [], total: 0, more: false };
+    const perClass = Math.min(smallest, listCap);
+    const shown = [];
+    let total = 0;
+    let more = false;
+    if (perClass < smallest) more = true;
+    groups.forEach((list) => {
+      total += Math.min(list.length, smallest);
+      list.slice(0, perClass).forEach((index) => shown.push(index));
+    });
+    return { shown, total, more };
+  }
+
+  function paintList() {
+    if (!stepsHost) return;
+    const rows = visibleFrames();
+    stepsHost.replaceChildren();
+    if (!outcome || !outcome.order) {
+      if (listNote) listNote.textContent = "The wires loop, so there is no path to list.";
+      if (moreButton) moreButton.hidden = true;
+      return;
+    }
+    const steps = stepsToShow();
+    let truncated = false;
+    let shownCount = 0;
+    let totalCount = 0;
+    steps.forEach((node) => {
+      const batch = filteredIndexes(node, rows);
+      totalCount += batch.total;
+      if (batch.more) truncated = true;
+      shownCount += batch.shown.length;
+      const section = document.createElement("section");
+      section.className = "step-block";
+      const heading = document.createElement("h3");
+      heading.textContent = titleOf(node);
+      const note = document.createElement("p");
+      note.className = "hint";
+      const counts = {};
+      batch.shown.forEach((index) => {
+        const port = stepDecision(node, index) || "in";
+        counts[port] = (counts[port] || 0) + 1;
+      });
+      const bits = Object.keys(counts).map((key) => counts[key] + " " + key);
+      const portNote = portFilter && portFilter.nodeId === node.id ? " · " + portFilter.port : "";
+      note.textContent = (bits.join(" · ") || "No photos") + portNote
+        + (batch.shown.length < batch.total ? ". Showing " + batch.shown.length + " of " + batch.total : "");
+      const grid = document.createElement("div");
+      grid.className = "grid";
+      batch.shown.forEach((index) => grid.appendChild(photoButton(rows[index], index, node)));
+      section.append(heading, note, grid);
+      stepsHost.appendChild(section);
+    });
+    if (listNote) {
+      const where = viewNodes.length
+        ? viewNodes.map((id) => titleOf(nodeById(id))).join(", ")
+        : "Every step";
+      listNote.textContent = where + ". " + totalCount + " photos across these steps. "
+        + (shownCount < totalCount ? "Showing " + shownCount + ". " : "")
+        + "Click a photo to see every score and the path it took. Click a selected block again to show every step.";
+    }
+    if (moreButton) moreButton.hidden = !truncated;
+  }
+
+  function photoButton(frame, index, node) {
     const button = document.createElement("button");
     button.type = "button";
-    const mark = endedAs(index);
-    const resinName = resinLib.colors[mark] ? mark : trueResinOf(frame);
-    button.className = "photo-hit tone-" + tone(frame, index);
+    const resinName = trueResinOf(frame);
+    button.className = "photo-hit tone-" + stepTone(node, frame, index);
     if (resinLib.colors[resinName]) button.dataset.resin = resinName;
     const image = document.createElement("img");
     image.alt = "";
     image.src = fileUrl(frame.path);
     const caption = document.createElement("p");
-    caption.textContent = frame.path.split("/").pop();
+    caption.textContent = tileText(node, frame, index);
+    button.title = caption.textContent;
     button.append(image, caption);
     button.addEventListener("click", () => openPhoto(frame, index));
     return button;
   }
 
-  function tone(frame, index) {
-    if (!outcome) return "hold";
-    const role = endedAs(index);
-    if (role === "dropped") return "bad";
-    if (role === "hold") return "hold";
-    if (role === "empty") return knownFrame(frame) ? "warn" : "good";
-    return callMatchesLabel(role, frame) ? "good" : "bad";
+  function tileText(node, frame, index) {
+    const decision = stepDecision(node, index);
+    if (node.type === "model") {
+      const row = node.model && frame.models ? frame.models[node.model] : null;
+      const predicted = row ? (row.resin || row.pred || decision) : (decision || "—");
+      const confidence = row && Number.isFinite(Number(row.confidence))
+        ? Number(row.confidence).toFixed(2)
+        : "—";
+      const distance = row ? formatCut(row[node.mode]) : "—";
+      return trueLabel(frame) + " · " + predicted + " · " + confidence + " · " + distance;
+    }
+    if (node.type === "belt") {
+      const value = frame.scores ? frame.scores[node.check] : null;
+      return (decision || "—") + " · " + formatCut(value);
+    }
+    return (decision || node.role || "in") + " · " + trueLabel(frame);
+  }
+
+  function stepTone(node, frame, index) {
+    const decision = stepDecision(node, index);
+    if (decision === "others") return "warn";
+    if (decision === "uncertain" || decision === "hold") return "hold";
+    if (decision === "dropped") return "bad";
+    if (node.type === "input" || node.type === "merge") return "hold";
+    return stepIsRight(node, frame, index) ? "good" : "bad";
   }
 
   function openPhoto(frame, index) {
@@ -1407,7 +1644,7 @@ if (root) {
     const detail = dialog.querySelector("[data-view-detail]");
     detail.replaceChildren();
     const role = outcome ? endedAs(index) : "dropped";
-    detail.appendChild(hint("Label " + (frame.true || "none") + ". Ended as " + role + "."));
+    detail.appendChild(hint("Label " + trueLabel(frame) + ". Ended as " + role + "."));
     const path = document.createElement("ol");
     path.className = "flow-path";
     if (outcome && outcome.visits) {
@@ -1426,7 +1663,7 @@ if (root) {
     Object.keys(frame.models || {}).forEach((rel) => {
       const row = frame.models[rel];
       detail.appendChild(hint(
-        modelTitle(rel) + " " + (row.pred || "—")
+        modelTitle(rel) + " " + (row.resin || row.pred || "—")
         + " " + Number(row.confidence).toFixed(3)
         + " · cloud " + formatCut(row.cloud)
         + " · call " + formatCut(row.call)

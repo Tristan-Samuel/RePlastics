@@ -103,8 +103,40 @@
       <p class="hint" data-split-note></p>
     </div>
     <div class="metrics" data-figures></div>
-    <p class="hint" data-list-note>Click a port to list the photos that left through it.</p>
-    <div class="grid" data-photos></div>
+    <p class="hint" data-list-note>Click a block to list the photos that reached it. Shift-click adds another step. Click a port to keep only the photos that left through it.</p>
+    <div class="list-tools" data-photo-filters>
+      <div class="seg" role="group" aria-label="Right or wrong">
+        <button type="button" data-outcome="all" aria-pressed="true">All</button>
+        <button type="button" data-outcome="right" aria-pressed="false">Right</button>
+        <button type="button" data-outcome="wrong" aria-pressed="false">Wrong</button>
+      </div>
+      <label>
+        Class
+        <select data-class-filter>
+          <option value="any">Any</option>
+          <option value="HDPE">HDPE</option>
+          <option value="PET">PET</option>
+          <option value="PP">PP</option>
+          <option value="plastic">Plastic</option>
+          <option value="metal">Metal</option>
+          <option value="uncertain">Uncertain</option>
+          <option value="others">Others</option>
+        </select>
+      </label>
+      <label>
+        Min confidence
+        <input type="number" min="0" max="1" step="0.01" value="0" data-min-confidence>
+      </label>
+      <label class="check">
+        <input type="checkbox" data-equal-classes>
+        Same count per class
+      </label>
+      <label class="check">
+        <input type="checkbox" data-hide-metal>
+        Hide metal
+      </label>
+    </div>
+    <div data-steps></div>
     <button type="button" class="ghost" data-list-more hidden>Show more</button>
     <h2>Recipe</h2>
     <div data-recipe></div>
@@ -129,5 +161,5 @@
   <script type="application/json" id="pipeline-scored">{{ scored_models|tojson }}</script>
 {% endblock %}
 {% block scripts %}
-  <script src="{{ url_for('static', filename='pipeline.js') }}?v=4"></script>
+  <script src="{{ url_for('static', filename='pipeline.js') }}?v=5"></script>
 {% endblock %}

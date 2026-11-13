@@ -1688,8 +1688,16 @@ def open_set_brief(model):
             stat.st_mtime_ns != meta.get("model_mtime_ns")
             or stat.st_size != meta.get("model_size")
         ),
+        "class_stale": _open_set_class_stale(model, meta),
         "mtime_ns": meta_path.stat().st_mtime_ns,
     }
+
+
+def _open_set_class_stale(model, meta):
+    classes = set(model.get("classes") or [])
+    if classes != {"HDPE", "PET", "PP"}:
+        return False
+    return set(meta.get("class_names") or []) != classes
 
 
 def presence_dir(model):
