@@ -28,9 +28,10 @@ if (root) {
   const KEEPS = [0.9, 0.93, 0.95, 0.97, 0.99, 0.995];
   const PORTIONS = [0.9, 0.95, 0.97, 0.99, 0.995];
   const HOLD_CAP = 0.05;
-  const LIST_STEP = 48;
+  const LIST_STEP = 96;
   const ADD_TYPES = { belt: true, model: true, merge: true, sink: true, input: true };
   const draftKey = "pipeline-draft:" + root.dataset.dataset;
+  const graphNameKey = "pipeline-graph:" + root.dataset.dataset;
   const resinLib = window.labResin || {
     order: ["HDPE", "PET", "PP", "OTHERS"],
     colors: { HDPE: "#3ee0c5", PET: "#6aa7ff", PP: "#f0b429", OTHERS: "#c084fc" },
@@ -51,7 +52,10 @@ if (root) {
   let minConfidence = 0;
   let equalClasses = false;
   let hideMetal = false;
+  let showDistance = false;
   let listCap = LIST_STEP;
+  let focusAfterScore = [];
+  let inspectorStale = false;
   let belt = null;
   let frames = [];
   let outcome = null;
@@ -252,6 +256,8 @@ if (root) {
       event.preventDefault();
       const state = event.detail || {};
       refreshScores().then(() => {
+        if (focusAfterScore.length) showFromNodes(focusAfterScore);
+        focusAfterScore = [];
         if (!scoreNote) return;
         scoreNote.textContent = state.exit_code
           ? (state.status_line || "Scoring stopped.")
@@ -265,9 +271,21 @@ if (root) {
       run();
     });
     root.querySelector("[data-save-form]").addEventListener("submit", saveGraph);
-    root.querySelector("[data-graph-pick]").addEventListener("change", (event) => {
-      if (event.target.value) loadGraph(event.target.value);
+    const loadGraphButton = root.querySelector("[data-graph-load]");
+    if (loadGraphButton) loadGraphButton.addEventListener("click", () => {
+      const name = root.querySelector("[data-graph-pick]").value;
+      if (!name) {
+        applyGraph(loadDraft(), "");
+        flowNote.textContent = "Loaded the draft saved in this browser.";
+        return;
+      }
+      loadGraph(name);
     });
+    const savedName = localStorage.getItem(graphNameKey) || "";
+    const graphPick = root.querySelector("[data-graph-pick]");
+    if (savedName && Array.from(graphPick.options).some((option) => option.value === savedName)) {
+      graphPick.value = savedName;
+    }
     document.querySelectorAll("[data-split-value]").forEach((button) => {
       button.addEventListener("click", () => {
         split = button.dataset.splitValue;
@@ -319,7 +337,25 @@ if (root) {
       listCap = LIST_STEP;
       paintList();
     });
-    if (scoreForm) scoreForm.addEventListener("submit", onScore);
+    const distancePick = document.querySelector("[data-show-distance]");
+    if (distancePick) distancePick.addEventListener("change", () => {
+      showDistance = distancePick.checked;
+      paintList();
+    });
+    const capPick = document.querySelector("[data-list-cap]");
+    if (capPick) capPick.addEventListener("change", () => {
+      const number = Number(capPick.value);
+      listCap = Number.isFinite(number) ? Math.min(500, Math.max(12, Math.round(number))) : LIST_STEP;
+      capPick.value = String(listCap);
+      paintList();
+    });
+    if (scoreForm) scoreForm.addEventListener("submit", (event) => onScore(event));
+    inspector.addEventListener("focusout", () => {
+      setTimeout(() => {
+        if (!inspectorStale || inspectorSelectOpen()) return;
+        paintInspector();
+      }, 0);
+    });
     dialog.querySelector("[data-view-close]").addEventListener("click", () => dialog.close());
     window.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
@@ -689,7 +725,17 @@ if (root) {
     };
   }
 
+  function inspectorSelectOpen() {
+    const active = document.activeElement;
+    return Boolean(active && active.tagName === "SELECT" && inspector.contains(active));
+  }
+
   function paintInspector() {
+    if (inspectorSelectOpen()) {
+      inspectorStale = true;
+      return;
+    }
+    inspectorStale = false;
     inspector.replaceChildren();
     const node = nodeById(selectedId);
     if (!node) {
@@ -793,18 +839,20 @@ if (root) {
       if (item.rel === node.model) option.selected = true;
       select.appendChild(option);
     });
+    select.value = node.model || "";
     select.addEventListener("change", () => {
-      node.model = select.value;
+      const value = select.value;
+      if (!select.isConnected || value === (node.model || "")) return;
+      node.model = value;
       pruneWires();
       saveDraft();
-      paintBoard();
-      paintInspector();
+      repaintCard(node);
       ensureModels();
     });
     picker.appendChild(select);
     inspector.appendChild(picker);
     if (node.model && !modelReady(node.model)) {
-      inspector.appendChild(hint("Not scored on this dataset yet. Score models reads the photos once."));
+      inspector.appendChild(hint("Not scored on this dataset yet. Score this checkpoint reads that model only and leaves the belt cache."));
     } else if (node.model && needsResinRefresh(node.model)) {
       inspector.appendChild(hint("This cache has no HDPE, PET, or PP call. Rescore to route those outputs."));
     }
@@ -813,17 +861,32 @@ if (root) {
       refreshCard(node);
       run();
     }, "0.01"));
-    inspector.appendChild(selectField("Distance", MODES.map((item) => item[0]), node.mode, (value) => {
-      node.mode = value;
-      refreshCard(node);
+    const useDistance = document.createElement("label");
+    useDistance.className = "check";
+    const distanceBox = document.createElement("input");
+    distanceBox.type = "checkbox";
+    distanceBox.checked = node.distanceOn !== false;
+    distanceBox.addEventListener("change", () => {
+      node.distanceOn = distanceBox.checked;
+      saveDraft();
+      paintInspector();
       run();
-    }, MODES.map((item) => item[1])));
-    inspector.appendChild(field("Mark", "number", node.distance, (value) => {
-      const number = Number(value);
-      if (!Number.isFinite(number) || number < 0) return;
-      node.distance = number;
-      run();
-    }, "any"));
+    });
+    useDistance.append(distanceBox, document.createTextNode(" Use distance"));
+    inspector.appendChild(useDistance);
+    if (node.distanceOn !== false) {
+      inspector.appendChild(selectField("Distance", MODES.map((item) => item[0]), node.mode, (value) => {
+        node.mode = value;
+        refreshCard(node);
+        run();
+      }, MODES.map((item) => item[1])));
+      inspector.appendChild(field("Mark", "number", node.distance, (value) => {
+        const number = Number(value);
+        if (!Number.isFinite(number) || number < 0) return;
+        node.distance = number;
+        run();
+      }, "any"));
+    }
     const keep = document.createElement("label");
     keep.className = "check";
     const keepBox = document.createElement("input");
@@ -866,6 +929,13 @@ if (root) {
       run();
     });
     actions.appendChild(useMark);
+    if (node.model) {
+      const scoreOne = document.createElement("button");
+      scoreOne.type = "button";
+      scoreOne.textContent = modelReady(node.model) ? "Rescore this checkpoint" : "Score this checkpoint";
+      scoreOne.addEventListener("click", () => scoreOneModel(node));
+      actions.appendChild(scoreOne);
+    }
     inspector.appendChild(actions);
     const goal = document.createElement("label");
     goal.textContent = "Fit for";
@@ -934,6 +1004,15 @@ if (root) {
     });
     wrap.appendChild(select);
     return wrap;
+  }
+
+  function repaintCard(node) {
+    const card = canvas.querySelector('[data-node="' + node.id + '"]');
+    const next = cardElement(node);
+    if (card) card.replaceWith(next);
+    else canvas.appendChild(next);
+    paintWires();
+    paintPending();
   }
 
   function refreshCard(node) {
@@ -1267,7 +1346,7 @@ if (root) {
   function judge(frame, node) {
     const confidence = Number(frame.confidence);
     const distance = Number(frame[node.mode]);
-    const far = Number.isFinite(distance) && distance > Number(node.distance);
+    const far = node.distanceOn !== false && Number.isFinite(distance) && distance > Number(node.distance);
     const clash = node.clash && frame.disagree;
     const call = predictedClass(frame, node);
     if (node.keepOn && confidence >= Number(node.keep)) return call;
@@ -1513,10 +1592,12 @@ if (root) {
       kept.push({ index, key: balanceKey(node, frame, index) });
     });
     if (!equalClasses) {
+      const all = kept.map((item) => item.index);
       return {
-        shown: kept.slice(0, listCap).map((item) => item.index),
-        total: kept.length,
-        more: kept.length > listCap,
+        shown: all.slice(0, listCap),
+        total: all.length,
+        more: all.length > listCap,
+        counts: portCounts(node, all),
       };
     }
     const groups = new Map();
@@ -1528,17 +1609,29 @@ if (root) {
     groups.forEach((list) => {
       if (list.length < smallest) smallest = list.length;
     });
-    if (!Number.isFinite(smallest)) return { shown: [], total: 0, more: false };
+    if (!Number.isFinite(smallest)) return { shown: [], total: 0, more: false, counts: {} };
     const perClass = Math.min(smallest, listCap);
     const shown = [];
-    let total = 0;
-    let more = false;
-    if (perClass < smallest) more = true;
+    const balanced = [];
     groups.forEach((list) => {
-      total += Math.min(list.length, smallest);
+      list.slice(0, smallest).forEach((index) => balanced.push(index));
       list.slice(0, perClass).forEach((index) => shown.push(index));
     });
-    return { shown, total, more };
+    return {
+      shown,
+      total: balanced.length,
+      more: perClass < smallest,
+      counts: portCounts(node, balanced),
+    };
+  }
+
+  function portCounts(node, indexes) {
+    const counts = {};
+    indexes.forEach((index) => {
+      const port = stepDecision(node, index) || "in";
+      counts[port] = (counts[port] || 0) + 1;
+    });
+    return counts;
   }
 
   function paintList() {
@@ -1554,39 +1647,44 @@ if (root) {
     let truncated = false;
     let shownCount = 0;
     let totalCount = 0;
+    const openIds = viewNodes.length ? viewNodes : [];
     steps.forEach((node) => {
       const batch = filteredIndexes(node, rows);
+      const open = openIds.indexOf(node.id) !== -1;
       totalCount += batch.total;
-      if (batch.more) truncated = true;
-      shownCount += batch.shown.length;
+      if (open && batch.more) truncated = true;
+      if (open) shownCount += batch.shown.length;
       const section = document.createElement("section");
       section.className = "step-block";
-      const heading = document.createElement("h3");
-      heading.textContent = titleOf(node);
-      const note = document.createElement("p");
-      note.className = "hint";
-      const counts = {};
-      batch.shown.forEach((index) => {
-        const port = stepDecision(node, index) || "in";
-        counts[port] = (counts[port] || 0) + 1;
-      });
-      const bits = Object.keys(counts).map((key) => counts[key] + " " + key);
+      const bar = document.createElement("button");
+      bar.type = "button";
+      bar.className = "step-bar" + (open ? " open" : "");
+      const bits = Object.keys(batch.counts || {}).map((key) => batch.counts[key] + " " + key);
       const portNote = portFilter && portFilter.nodeId === node.id ? " · " + portFilter.port : "";
-      note.textContent = (bits.join(" · ") || "No photos") + portNote
-        + (batch.shown.length < batch.total ? ". Showing " + batch.shown.length + " of " + batch.total : "");
-      const grid = document.createElement("div");
-      grid.className = "grid";
-      batch.shown.forEach((index) => grid.appendChild(photoButton(rows[index], index, node)));
-      section.append(heading, note, grid);
+      const countLine = (bits.join(" · ") || "No photos") + portNote
+        + (open && batch.shown.length < batch.total ? ". Showing " + batch.shown.length + " of " + batch.total : "");
+      const name = document.createElement("strong");
+      name.textContent = titleOf(node);
+      const detail = document.createElement("span");
+      detail.textContent = countLine;
+      bar.append(name, detail);
+      bar.addEventListener("click", (event) => chooseBlocks(node.id, event.shiftKey));
+      section.appendChild(bar);
+      if (open) {
+        const grid = document.createElement("div");
+        grid.className = "grid";
+        batch.shown.forEach((index) => grid.appendChild(photoButton(rows[index], index, node)));
+        section.appendChild(grid);
+      }
       stepsHost.appendChild(section);
     });
     if (listNote) {
       const where = viewNodes.length
         ? viewNodes.map((id) => titleOf(nodeById(id))).join(", ")
-        : "Every step";
+        : "Every step is collapsed";
       listNote.textContent = where + ". " + totalCount + " photos across these steps. "
-        + (shownCount < totalCount ? "Showing " + shownCount + ". " : "")
-        + "Click a photo to see every score and the path it took. Click a selected block again to show every step.";
+        + (viewNodes.length && shownCount < totalCount ? "Showing " + shownCount + ". " : "")
+        + "Green is right, red is wrong, amber is others, gray is uncertain or empty. The left edge is the resin. Click a block to open its photos.";
     }
     if (moreButton) moreButton.hidden = !truncated;
   }
@@ -1616,8 +1714,8 @@ if (root) {
       const confidence = row && Number.isFinite(Number(row.confidence))
         ? Number(row.confidence).toFixed(2)
         : "—";
-      const distance = row ? formatCut(row[node.mode]) : "—";
-      return trueLabel(frame) + " · " + predicted + " · " + confidence + " · " + distance;
+      const distance = showDistance && row ? " · " + formatCut(row[node.mode]) : "";
+      return trueLabel(frame) + " · " + predicted + " · " + confidence + distance;
     }
     if (node.type === "belt") {
       const value = frame.scores ? frame.scores[node.check] : null;
@@ -1868,13 +1966,49 @@ if (root) {
     return false;
   }
 
+  function modelNeedsBuild(rel) {
+    return !modelReady(rel) || needsResinRefresh(rel);
+  }
+
+  function downstreamIds(id) {
+    const seen = new Set();
+    const stack = [id];
+    const out = [];
+    while (stack.length) {
+      const current = stack.pop();
+      if (!current || seen.has(current)) continue;
+      seen.add(current);
+      out.push(current);
+      graph.wires.forEach((wire) => {
+        if (wire.from === current) stack.push(wire.to);
+      });
+    }
+    return out;
+  }
+
+  function showFromNodes(ids) {
+    const next = [];
+    ids.forEach((id) => {
+      downstreamIds(id).forEach((item) => {
+        if (next.indexOf(item) === -1) next.push(item);
+      });
+    });
+    if (!next.length) return;
+    viewNodes = next;
+    listCap = LIST_STEP;
+    canvas.querySelectorAll(".flow-card").forEach((card) => {
+      card.classList.toggle("in-view", viewNodes.indexOf(card.dataset.node) !== -1);
+    });
+    paintList();
+  }
+
   function paintScoreButton() {
     if (!scoreButton) return;
     const rels = modelRels();
-    const missingModel = rels.some((rel) => !scoredAtLoad.has(rel) && !modelReady(rel));
+    const missingModel = rels.some((rel) => modelNeedsBuild(rel));
     const beltReady = root.dataset.beltReady === "yes" || (belt && belt.ready);
     if (!beltReady) scoreButton.textContent = "Score belt checks";
-    else if (missingModel) scoreButton.textContent = "Score models";
+    else if (missingModel) scoreButton.textContent = "Score new checkpoints";
     else scoreButton.textContent = "Rescore";
     if (scoreNote && belt && belt.ready) {
       const counts = belt.counts || {};
@@ -1890,29 +2024,59 @@ if (root) {
     return rels;
   }
 
-  async function onScore(event) {
+  function scoreOneModel(node) {
+    if (!node.model) {
+      flowNote.textContent = "Pick a checkpoint first.";
+      return;
+    }
+    const replacing = modelReady(node.model) || scoredAtLoad.has(node.model);
+    const ids = graph.nodes.filter((item) => item.type === "model" && item.model === node.model).map((item) => item.id);
+    onScore({ preventDefault() {} }, { rels: [node.model], rerun: replacing, skipBelt: true, focus: ids });
+  }
+
+  function hiddenField(name, value) {
+    let field = scoreForm.querySelector('input[name="' + name + '"]');
+    if (!value) {
+      if (field) field.remove();
+      return;
+    }
+    if (!field) {
+      field = document.createElement("input");
+      field.type = "hidden";
+      field.name = name;
+      scoreForm.appendChild(field);
+    }
+    field.value = value;
+  }
+
+  async function onScore(event, options) {
     event.preventDefault();
+    const beltReady = root.dataset.beltReady === "yes" || (belt && belt.ready);
+    const needing = modelRels().filter((rel) => modelNeedsBuild(rel));
+    const rels = options && options.rels ? options.rels : (needing.length ? needing : modelRels());
+    const skipBelt = Boolean(options && options.skipBelt);
+    const cachesOnDisk = rels.length > 0 && rels.every((rel) => scoredAtLoad.has(rel)) && (skipBelt || beltReady);
+    const replacing = options && options.rerun !== undefined ? options.rerun : cachesOnDisk;
+    focusAfterScore = options && options.focus ? options.focus.slice() : graph.nodes.filter((node) => (
+      node.type === "model" && rels.indexOf(node.model) !== -1
+    )).map((node) => node.id);
     const host = scoreForm.querySelector("[data-score-models]");
     host.replaceChildren();
-    modelRels().forEach((rel) => {
+    rels.forEach((rel) => {
       const input = document.createElement("input");
       input.type = "hidden";
       input.name = "model";
       input.value = rel;
       host.appendChild(input);
     });
-    const beltReady = root.dataset.beltReady === "yes" || (belt && belt.ready);
-    const missing = !beltReady || modelRels().some((rel) => !scoredAtLoad.has(rel) && !modelReady(rel));
-    if (!missing) {
-      if (!window.confirm("This scores these photos again and replaces the cache. Continue?")) return;
-      let field = scoreForm.querySelector('input[name="confirm"]');
-      if (!field) {
-        field = document.createElement("input");
-        field.type = "hidden";
-        field.name = "confirm";
-        scoreForm.appendChild(field);
-      }
-      field.value = "yes";
+    hiddenField("skip_belt", skipBelt ? "yes" : "");
+    hiddenField("confirm", "");
+    if (replacing) {
+      const message = skipBelt
+        ? "This scores this checkpoint again. The belt cache and the other checkpoints stay. Continue?"
+        : "This scores these photos again and replaces the cache. Continue?";
+      if (!window.confirm(message)) return;
+      hiddenField("confirm", "yes");
     }
     if (scoreNote) scoreNote.textContent = "Starting…";
     if (scoreButton) scoreButton.disabled = true;
@@ -1944,6 +2108,8 @@ if (root) {
       const status = await fetch("/jobs/status", { cache: "no-store" }).then((item) => item.json());
       if (status && !status.running) {
         await refreshScores();
+        if (focusAfterScore.length) showFromNodes(focusAfterScore);
+        focusAfterScore = [];
         if (scoreNote) {
           scoreNote.textContent = status.exit_code
             ? (status.status_line || "Scoring stopped.")
@@ -1976,7 +2142,29 @@ if (root) {
       select.appendChild(option);
     }
     select.value = payload.name;
+    localStorage.setItem(graphNameKey, payload.name);
     flowNote.textContent = "Saved " + payload.name + ".";
+  }
+
+  function applyGraph(next, name) {
+    if (!next || !Array.isArray(next.nodes) || !Array.isArray(next.wires)) {
+      flowNote.textContent = "That file is not a pipeline.";
+      return false;
+    }
+    graph = next;
+    bumpSerial();
+    selectedId = graph.nodes[0] ? graph.nodes[0].id : "";
+    pending = null;
+    portFilter = null;
+    viewNodes = [];
+    saveDraft();
+    localStorage.setItem(graphNameKey, name || "");
+    const select = root.querySelector("[data-graph-pick]");
+    if (select) select.value = name || "";
+    paintBoard();
+    paintInspector();
+    run();
+    return true;
   }
 
   async function loadGraph(name) {
@@ -1990,14 +2178,7 @@ if (root) {
       flowNote.textContent = "That file is not a pipeline.";
       return;
     }
-    graph = payload.graph;
-    bumpSerial();
-    selectedId = graph.nodes[0] ? graph.nodes[0].id : "";
-    pending = null;
-    portFilter = null;
-    saveDraft();
-    paintBoard();
-    paintInspector();
+    if (!applyGraph(payload.graph, name)) return;
     await ensureModels();
     flowNote.textContent = "Loaded " + name + ".";
   }

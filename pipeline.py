@@ -66,6 +66,11 @@ def parse_args():
         action="store_true",
         help="Replace a cache that is already on disk.",
     )
+    parser.add_argument(
+        "--skip-belt",
+        action="store_true",
+        help="Leave the belt cache alone and score only the checkpoints named here.",
+    )
     return parser.parse_args()
 
 
@@ -522,7 +527,10 @@ def main():
         raise SystemExit(f"{data_dir} is not on disk.")
     out = cache_root(data_dir)
     try:
-        build_belt(data_dir, out, args.rerun)
+        if args.skip_belt and (out / "belt.json").is_file():
+            print(f"Belt cache left as it is at {out / 'belt.json'}", flush=True)
+        else:
+            build_belt(data_dir, out, args.rerun and not args.skip_belt)
         if args.belt_only:
             return
         if not args.model:

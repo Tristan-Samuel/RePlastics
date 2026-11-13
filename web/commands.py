@@ -667,16 +667,22 @@ def _prepare_pipeline(form, require_confirm):
         ROOT / "analysis" / "pipeline-cache" / data_dir / "models" / f"{Path(rel).stem}.json"
         for rel in models
     ]
+    skip_belt = (form.get("skip_belt") or "") == "yes"
     needs = belt.is_file() and all(path.is_file() for path in model_paths)
     argv = [_python(), "pipeline.py", "--data-dir", data_dir]
     for rel in models:
         argv.extend(["--model", rel])
     if not models:
         argv.append("--belt-only")
+    if skip_belt:
+        argv.append("--skip-belt")
     message = ""
     if needs:
         argv.append("--rerun")
-        message = "This scores these photos again and replaces the cache. Continue?"
+        if skip_belt:
+            message = "This scores this checkpoint again. The belt cache stays. Continue?"
+        else:
+            message = "This scores these photos again and replaces the cache. Continue?"
         if require_confirm:
             _confirmed(form, True)
     title = "Pipeline scores" if models else "Pipeline belt checks"

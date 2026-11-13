@@ -76,6 +76,7 @@
           <input type="text" name="graph_name" value="starter" maxlength="60" data-graph-name>
         </label>
         <button type="submit">Save</button>
+        <button type="button" data-graph-load>Load</button>
       </form>
     </div>
     <p class="hint" data-flow-note>Drag a button onto the board to add a card. Click an output, then the next card’s input. Click a wire to remove it. An unwired output is a dropped pile.</p>
@@ -103,7 +104,16 @@
       <p class="hint" data-split-note></p>
     </div>
     <div class="metrics" data-figures></div>
-    <p class="hint" data-list-note>Click a block to list the photos that reached it. Shift-click adds another step. Click a port to keep only the photos that left through it.</p>
+    <p class="hint" data-list-note>Click a block to open its photos. Shift-click adds another step. Click a port to keep only the photos that left through it. Steps stay collapsed until you open them.</p>
+    <div class="tone-legend" aria-label="Photo colors">
+      <span><i class="good"></i> Right</span>
+      <span><i class="bad"></i> Wrong</span>
+      <span><i class="warn"></i> Others</span>
+      <span><i class="hold"></i> Uncertain or empty</span>
+      <span><i class="resin-hdpe"></i> HDPE</span>
+      <span><i class="resin-pet"></i> PET</span>
+      <span><i class="resin-pp"></i> PP</span>
+    </div>
     <div class="list-tools" data-photo-filters>
       <div class="seg" role="group" aria-label="Right or wrong">
         <button type="button" data-outcome="all" aria-pressed="true">All</button>
@@ -135,8 +145,16 @@
         <input type="checkbox" data-hide-metal>
         Hide metal
       </label>
+      <label class="check">
+        <input type="checkbox" data-show-distance>
+        Show distance
+      </label>
+      <label>
+        Photos per step
+        <input type="number" min="12" max="500" step="12" value="96" data-list-cap>
+      </label>
     </div>
-    <div data-steps></div>
+    <div class="gallery-scroll" data-steps></div>
     <button type="button" class="ghost" data-list-more hidden>Show more</button>
     <h2>Recipe</h2>
     <div data-recipe></div>
@@ -161,5 +179,5 @@
   <script type="application/json" id="pipeline-scored">{{ scored_models|tojson }}</script>
 {% endblock %}
 {% block scripts %}
-  <script src="{{ url_for('static', filename='pipeline.js') }}?v=5"></script>
+  <script src="{{ url_for('static', filename='pipeline.js') }}?v=6"></script>
 {% endblock %}
