@@ -29,7 +29,7 @@
         </label>
       </form>
       {% if model and model.head == 'resin' %}
-        <p class="hint">This checkpoint scores {{ model.classes|join(', ') }}. Each of those is plastic here. It has no metal class. Confidence under 0.85 is the review bucket in its metadata, which this page calls uncertain. Distance still uses the metal and plastic train photos.</p>
+        <p class="hint">This checkpoint scores {{ model.classes|join(', ') }}. A photo is correct when the call matches that resin. A file with no resin label is still plastic. It has no metal class. Confidence under 0.85 is the review bucket in its metadata, which this page calls uncertain. Distance still uses the metal and plastic train photos.</p>
       {% endif %}
       <form
         id="open-set-build"
@@ -195,10 +195,10 @@
           <canvas data-scatter width="900" height="440" aria-label="Confidence against feature distance. Scroll to zoom. Click a point to open the photo."></canvas>
           <p class="scatter-tip" data-scatter-tip hidden></p>
         </div>
-        <ul class="legend">
-          <li><i class="swatch metal"></i>Metal</li>
-          <li><i class="swatch plastic"></i>Plastic</li>
-          <li><i class="swatch probe"></i>No label</li>
+        <ul class="legend" data-legend>
+          <li data-legend-class="metal"><i class="swatch metal"></i>Metal</li>
+          <li data-legend-class="plastic"><i class="swatch plastic"></i>Plastic</li>
+          <li data-legend-ring="probe"><i class="swatch probe"></i>No label</li>
           <li><i class="swatch ring-others"></i>Others</li>
           <li><i class="swatch ring-uncertain"></i>Uncertain</li>
           <li><i class="swatch ring-miss"></i>Misidentified</li>

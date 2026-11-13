@@ -357,6 +357,10 @@ a.model-card .chip.warn { color: var(--warn); }
 .swatch.metal { background: #f0b429; }
 .swatch.plastic { background: #3ee0c5; }
 .swatch.probe { background: #c084fc; }
+.swatch.hdpe { background: #3ee0c5; }
+.swatch.pet { background: #6aa7ff; }
+.swatch.pp { background: #f0b429; }
+.swatch.others { background: #c084fc; }
 .swatch.ring-others,
 .swatch.ring-uncertain,
 .swatch.ring-miss,
@@ -1146,6 +1150,7 @@ button.photo-hit p {
   flex-direction: column;
   gap: 0.1rem;
   cursor: grab;
+  touch-action: none;
 }
 
 .flow-card header span {
@@ -1184,6 +1189,11 @@ button.photo-hit p {
 }
 
 .flow-port.armed { border-color: var(--accent); color: var(--accent); }
+.flow-port[data-port="HDPE"] { color: #3ee0c5; }
+.flow-port[data-port="PET"] { color: #6aa7ff; }
+.flow-port[data-port="PP"] { color: #f0b429; }
+.flow-port[data-port="OTHERS"] { color: #c084fc; }
+.flow-board.drop-ready { outline: 1px dashed var(--accent); outline-offset: -2px; }
 
 .flow-inspector {
   display: flex;
@@ -1227,9 +1237,14 @@ button.photo-hit p {
   object-fit: cover;
   background: #05070a;
 }
+.photo-hit.tone-good { border: 2px solid var(--good); }
 .photo-hit.tone-bad { border: 2px solid var(--bad); }
 .photo-hit.tone-warn { border: 2px solid var(--warn); }
 .photo-hit.tone-hold { border: 2px solid var(--line); }
+.frame[data-resin="HDPE"], .photo-hit[data-resin="HDPE"] { border-left: 4px solid #3ee0c5; }
+.frame[data-resin="PET"], .photo-hit[data-resin="PET"] { border-left: 4px solid #6aa7ff; }
+.frame[data-resin="PP"], .photo-hit[data-resin="PP"] { border-left: 4px solid #f0b429; }
+.frame[data-resin="OTHERS"], .photo-hit[data-resin="OTHERS"] { border-left: 4px solid #c084fc; }
 
 @media (max-width: 900px) {
   .flow-layout { grid-template-columns: 1fr; }

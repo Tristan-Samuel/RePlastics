@@ -28,6 +28,7 @@ from preprocess import (
     inference_transform,
     load_rgb,
     mapped_class,
+    resin_from_path,
     true_class_from_path,
 )
 from trashnet import EXPECTED_CLASSES
@@ -420,6 +421,9 @@ def pack_row(path, split, true_name, measured, index):
     resin = measured["resin"][index]
     if resin:
         row["resin"] = resin
+    true_resin = resin_from_path(path)
+    if true_resin:
+        row["true_resin"] = true_resin
     return row
 
 
@@ -445,12 +449,16 @@ def _quantile(values):
     return float(np.quantile(values, SUGGEST_QUANTILE))
 
 
+def _call_right(row):
+    if row.get("true") is None:
+        return False
+    if row.get("resin") and row.get("true_resin"):
+        return row["resin"] == row["true_resin"]
+    return row["pred"] == row["true"]
+
+
 def suggestions_from(rows):
-    correct = [
-        row
-        for row in rows
-        if row["true"] is not None and row["pred"] == row["true"]
-    ]
+    correct = [row for row in rows if _call_right(row)]
     found = {}
     for key in SCORE_KEYS:
         found[key] = _quantile([row[key] for row in correct])
@@ -532,9 +540,11 @@ def write_report(folder, bank, frames, data_dir):
     if any(row.get("resin") for row in frames):
         lines.extend(
             [
-                "The head is HDPE, PET, and PP. Each call is scored as",
-                "plastic. This file has no metal class. Confidence under",
-                "0.85 is their review bucket. Here that cutoff is uncertain.",
+                "The head is HDPE, PET, and PP. A call is correct when it",
+                "matches the resin on the photo. A photo with no resin label",
+                "is still read as plastic. This head has no metal class.",
+                "Confidence under 0.85 is their review bucket. Here that",
+                "cutoff is uncertain.",
                 "",
             ]
         )

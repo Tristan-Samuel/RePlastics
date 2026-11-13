@@ -14,6 +14,7 @@ from flask import (
     Flask,
     Response,
     abort,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -219,6 +220,8 @@ def create_app():
                     "rel": item["rel"],
                     "title": item["title"],
                     "label": item["option_label"],
+                    "classes": list(item.get("classes") or []),
+                    "head": item.get("head") or "",
                 }
                 for item in models
             ],
@@ -236,8 +239,8 @@ def create_app():
         data_name = _pipeline_data()
         path = _belt_cache(data_name)
         if not path.is_file():
-            return {"ready": False, "frames": [], "defaults": []}
-        return send_file(path, mimetype="application/json")
+            return _no_store(jsonify({"ready": False, "frames": [], "defaults": []}))
+        return _no_store(send_file(path, mimetype="application/json"))
 
     @app.get("/pipeline/model.json")
     def pipeline_model():
@@ -250,8 +253,8 @@ def create_app():
             abort(404)
         path = _model_cache(data_name, rel)
         if not path.is_file():
-            return {"ready": False, "model": rel, "frames": []}
-        return send_file(path, mimetype="application/json")
+            return _no_store(jsonify({"ready": False, "model": rel, "frames": []}))
+        return _no_store(send_file(path, mimetype="application/json"))
 
     @app.get("/pipeline/graphs/<name>")
     def pipeline_graph(name):
@@ -424,13 +427,18 @@ def create_app():
 
     @app.post("/jobs/start")
     def start_job():
+        json_job = "application/json" in (request.headers.get("Accept") or "")
         try:
             form = _job_form()
             prepared = prepare(form, require_confirm=True)
             runner.start(prepared)
         except CommandError as error:
+            if json_job:
+                return jsonify({"ok": False, "error": str(error)}), 400
             return render_template("error.html", message=str(error)), 400
         except BusyError as error:
+            if json_job:
+                return jsonify({"ok": False, "error": f"{error} is already running."}), 409
             return (
                 render_template(
                     "error.html",
@@ -438,6 +446,8 @@ def create_app():
                 ),
                 409,
             )
+        if json_job:
+            return jsonify({"ok": True, "title": prepared.title})
         if (form.get("kind") or "").strip() == "gradcam":
             stem = Path(form.get("model") or "").stem
             argv = prepared.argv
@@ -841,6 +851,11 @@ def _show_in_folder(path):
         return
     folder = resolved if resolved.is_dir() else resolved.parent
     subprocess.run(["xdg-open", str(folder)], check=False)
+
+
+def _no_store(response):
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _back():

@@ -823,8 +823,9 @@ _KNOWN = {
             "14 Oct resin head for RPR-SORT-0003. The classes are HDPE, "
             "PET, and PP, in that order. Confidence under 0.85 is their "
             "review bucket. The parity figure is their v2_2 test, not "
-            "this lab's belt split. Open set reads each resin as plastic. "
-            "This head has no metal class."
+            "this lab's belt split. Open set colors those resins and counts "
+            "a call correct when it matches the resin on the photo. A photo "
+            "with no resin label is still plastic. This head has no metal class."
         ),
     },
 }

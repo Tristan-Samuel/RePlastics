@@ -29,13 +29,16 @@ if (root) {
   const PORTIONS = [0.9, 0.95, 0.97, 0.99, 0.995];
   const HOLD_CAP = 0.05;
   const LIST_STEP = 48;
-  const METAL = 1;
-  const PLASTIC = 2;
-  const EMPTY = 4;
-  const HOLD = 8;
+  const ADD_TYPES = { belt: true, model: true, merge: true, sink: true, input: true };
   const draftKey = "pipeline-draft:" + root.dataset.dataset;
+  const resinLib = window.labResin || {
+    order: ["HDPE", "PET", "PP", "OTHERS"],
+    colors: { HDPE: "#3ee0c5", PET: "#6aa7ff", PP: "#f0b429", OTHERS: "#c084fc" },
+    fromPath: function () { return ""; },
+  };
 
   let catalog = checks.slice();
+  const loaded = new Map();
   let graph = loadDraft() || starter();
   let serial = 20;
   let selectedId = graph.nodes[0] ? graph.nodes[0].id : "";
@@ -47,7 +50,7 @@ if (root) {
   let frames = [];
   let outcome = null;
   let drag = null;
-  const loaded = new Map();
+  let palette = "";
 
   bumpSerial();
   bindChrome();
@@ -69,6 +72,14 @@ if (root) {
     return found ? found.title : rel;
   }
 
+  function modelClasses(rel) {
+    const payload = loaded.get(rel);
+    if (payload && Array.isArray(payload.classes) && payload.classes.length) return payload.classes.slice();
+    const found = modelChoice(rel);
+    if (found && Array.isArray(found.classes) && found.classes.length) return found.classes.slice();
+    return ["metal", "plastic"];
+  }
+
   function nodeById(id) {
     return graph.nodes.find((node) => node.id === id) || null;
   }
@@ -86,7 +97,7 @@ if (root) {
     if (!node) return [];
     if (node.type === "input" || node.type === "merge") return ["out"];
     if (node.type === "belt") return ["occupied", "empty"];
-    if (node.type === "model") return ["metal", "plastic", "uncertain", "others"];
+    if (node.type === "model") return modelClasses(node.model).concat(["uncertain", "others"]);
     return [];
   }
 
@@ -94,6 +105,10 @@ if (root) {
     const blob = checkInfo("largest_blob");
     const chroma = checkInfo("chroma");
     const model = root.dataset.defaultModel || "";
+    const classes = modelClasses(model);
+    if (classes.indexOf("HDPE") !== -1 && classes.indexOf("PET") !== -1 && classes.indexOf("PP") !== -1) {
+      return resinStarter(model, classes, blob, chroma);
+    }
     return {
       nodes: [
         { id: "in", type: "input", x: 24, y: 200 },
@@ -126,6 +141,47 @@ if (root) {
     };
   }
 
+  function resinStarter(model, classes, blob, chroma) {
+    const sinks = classes.map((name, index) => ({
+      id: name.toLowerCase(),
+      type: "sink",
+      name: name,
+      role: name,
+      x: 1180,
+      y: 24 + index * 150,
+    }));
+    const wires = [
+      { id: "w1", from: "in", port: "out", to: "blob" },
+      { id: "w2", from: "blob", port: "occupied", to: "join" },
+      { id: "w3", from: "blob", port: "empty", to: "chroma" },
+      { id: "w4", from: "chroma", port: "occupied", to: "join" },
+      { id: "w5", from: "chroma", port: "empty", to: "empty" },
+      { id: "w6", from: "join", port: "out", to: "resin" },
+      { id: "w7", from: "resin", port: "uncertain", to: "hold" },
+      { id: "w8", from: "resin", port: "others", to: "hold" },
+    ];
+    classes.forEach((name) => {
+      wires.push({
+        id: "w-" + name.toLowerCase(),
+        from: "resin",
+        port: name,
+        to: name.toLowerCase(),
+      });
+    });
+    return {
+      nodes: [
+        { id: "in", type: "input", x: 24, y: 200 },
+        { id: "blob", type: "belt", check: "largest_blob", cut: blob.cut, emptyWhen: blob.empty_when, x: 280, y: 80 },
+        { id: "chroma", type: "belt", check: "chroma", cut: chroma.cut, emptyWhen: chroma.empty_when, x: 280, y: 360 },
+        { id: "join", type: "merge", title: "Occupied", x: 560, y: 180 },
+        { id: "resin", type: "model", model: model, confidence: 0.85, mode: "cloud", distance: 0.5, keepOn: false, keep: 0.95, clash: false, x: 840, y: 140 },
+        { id: "empty", type: "sink", name: "Empty", role: "empty", x: 560, y: 460 },
+        { id: "hold", type: "sink", name: "Hold", role: "hold", x: 1180, y: 24 + classes.length * 150 },
+      ].concat(sinks),
+      wires: wires,
+    };
+  }
+
   function loadDraft() {
     try {
       const raw = JSON.parse(localStorage.getItem(draftKey) || "null");
@@ -154,7 +210,47 @@ if (root) {
 
   function bindChrome() {
     root.querySelectorAll("[data-add]").forEach((button) => {
+      button.draggable = true;
+      button.addEventListener("dragstart", (event) => {
+        palette = button.dataset.add || "";
+        event.dataTransfer.setData("text/plain", palette);
+        event.dataTransfer.effectAllowed = "copy";
+      });
+      button.addEventListener("dragend", () => {
+        palette = "";
+        board.classList.remove("drop-ready");
+      });
       button.addEventListener("click", () => addNode(button.dataset.add));
+    });
+    board.addEventListener("dragover", (event) => {
+      if (!ADD_TYPES[palette]) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      board.classList.add("drop-ready");
+    });
+    board.addEventListener("dragleave", (event) => {
+      if (!board.contains(event.relatedTarget)) board.classList.remove("drop-ready");
+    });
+    board.addEventListener("drop", (event) => {
+      const type = ADD_TYPES[palette] ? palette : "";
+      palette = "";
+      board.classList.remove("drop-ready");
+      if (!type) return;
+      event.preventDefault();
+      const origin = canvas.getBoundingClientRect();
+      addNode(type, event.clientX - origin.left - 110, event.clientY - origin.top - 20);
+    });
+    document.addEventListener("lab-job-done", (event) => {
+      const title = (event.detail && event.detail.title) || "";
+      if (title.indexOf("Pipeline") === -1) return;
+      event.preventDefault();
+      const state = event.detail || {};
+      refreshScores().then(() => {
+        if (!scoreNote) return;
+        scoreNote.textContent = state.exit_code
+          ? (state.status_line || "Scoring stopped.")
+          : "Scores are in. Move a card or a cut without scoring again.";
+      });
     });
     root.querySelector("[data-tidy]").addEventListener("click", () => {
       tidy();
@@ -198,13 +294,21 @@ if (root) {
     board.addEventListener("pointerup", endDrag);
   }
 
-  function addNode(type) {
+  function viewSpot() {
+    return {
+      x: board.scrollLeft + 32,
+      y: board.scrollTop + 32,
+    };
+  }
+
+  function addNode(type, x, y) {
     const count = graph.nodes.length;
+    const spot = viewSpot();
     const node = {
       id: nextId("n"),
       type,
-      x: 32 + (count % 4) * 28,
-      y: 32 + (count % 5) * 24,
+      x: Number.isFinite(x) ? Math.max(0, x) : spot.x + (count % 4) * 28,
+      y: Number.isFinite(y) ? Math.max(0, y) : spot.y + (count % 5) * 24,
     };
     if (type === "input" && graph.nodes.some((item) => item.type === "input")) {
       flowNote.textContent = "There is already an input. The split buttons choose which photos enter it.";
@@ -444,33 +548,61 @@ if (root) {
 
   function startDrag(event, node, card, header) {
     if (event.button !== undefined && event.button !== 0) return;
-    const rect = card.getBoundingClientRect();
+    event.preventDefault();
     drag = {
       id: node.id,
-      ox: event.clientX - rect.left,
-      oy: event.clientY - rect.top,
+      pointer: event.pointerId,
+      x: node.x,
+      y: node.y,
+      cx: event.clientX,
+      cy: event.clientY,
     };
+    board.style.overflow = "hidden";
     header.setPointerCapture(event.pointerId);
   }
 
   function onDrag(event) {
-    if (!drag) return;
+    if (!drag || event.pointerId !== drag.pointer) return;
+    event.preventDefault();
     const node = nodeById(drag.id);
     const card = canvas.querySelector('[data-node="' + drag.id + '"]');
     if (!node || !card) return;
-    const origin = canvas.getBoundingClientRect();
-    node.x = Math.max(0, event.clientX - origin.left - drag.ox);
-    node.y = Math.max(0, event.clientY - origin.top - drag.oy);
+    node.x = Math.max(0, drag.x + event.clientX - drag.cx);
+    node.y = Math.max(0, drag.y + event.clientY - drag.cy);
     card.style.left = node.x + "px";
     card.style.top = node.y + "px";
+    const left = board.scrollLeft;
+    const top = board.scrollTop;
     resizeCanvas();
+    board.scrollLeft = left;
+    board.scrollTop = top;
     paintWires();
   }
 
   function endDrag() {
     if (!drag) return;
+    const node = nodeById(drag.id);
     drag = null;
+    board.style.overflow = "";
+    if (node) {
+      revealNode(node);
+      selectNode(node.id);
+    }
     saveDraft();
+  }
+
+  function revealNode(node) {
+    const margin = 24;
+    const right = node.x + 240;
+    const bottom = node.y + 180;
+    if (node.x < board.scrollLeft + margin) board.scrollLeft = Math.max(0, node.x - margin);
+    else if (right > board.scrollLeft + board.clientWidth - margin) {
+      board.scrollLeft = right - board.clientWidth + margin;
+    }
+    if (node.y < board.scrollTop + margin) board.scrollTop = Math.max(0, node.y - margin);
+    else if (bottom > board.scrollTop + board.clientHeight - margin) {
+      board.scrollTop = bottom - board.clientHeight + margin;
+    }
   }
 
   function paintWires() {
@@ -535,7 +667,7 @@ if (root) {
         node.name = value || "Pile";
         refreshCard(node);
       }));
-      inspector.appendChild(selectField("Role", ["metal", "plastic", "empty", "hold"], node.role || "hold", (value) => {
+      inspector.appendChild(selectField("Role", sinkRoles(), node.role || "hold", (value) => {
         node.role = value;
         refreshCard(node);
         run();
@@ -612,8 +744,9 @@ if (root) {
     });
     select.addEventListener("change", () => {
       node.model = select.value;
+      pruneWires();
       saveDraft();
-      refreshCard(node);
+      paintBoard();
       paintInspector();
       ensureModels();
     });
@@ -621,6 +754,8 @@ if (root) {
     inspector.appendChild(picker);
     if (node.model && !modelReady(node.model)) {
       inspector.appendChild(hint("Not scored on this dataset yet. Score models reads the photos once."));
+    } else if (node.model && needsResinRefresh(node.model)) {
+      inspector.appendChild(hint("This cache has no HDPE, PET, or PP call. Rescore to route those outputs."));
     }
     inspector.appendChild(field("Confidence", "number", node.confidence, (value) => {
       node.confidence = snap(value, 0.5, 0.99, 0.85);
@@ -776,10 +911,94 @@ if (root) {
     return Boolean(payload && payload.ready && payload.frames && payload.frames.length);
   }
 
+  function needsResinRefresh(rel) {
+    if (modelClasses(rel).indexOf("HDPE") === -1) return false;
+    const payload = loaded.get(rel);
+    if (!payload || !Array.isArray(payload.frames) || !payload.frames.length) return false;
+    return !payload.frames.some((frame) => frame.resin);
+  }
+
+  function sinkRoles() {
+    const roles = [];
+    graph.nodes.forEach((node) => {
+      if (node.type !== "model") return;
+      modelClasses(node.model).forEach((name) => {
+        if (roles.indexOf(name) === -1) roles.push(name);
+      });
+    });
+    ["metal", "plastic", "empty", "hold"].forEach((name) => {
+      if (roles.indexOf(name) === -1) roles.push(name);
+    });
+    return roles;
+  }
+
+  function pruneWires() {
+    const before = graph.wires.length;
+    graph.wires = graph.wires.filter((wire) => {
+      const node = nodeById(wire.from);
+      return node && portsOf(node).indexOf(wire.port) !== -1;
+    });
+    return graph.wires.length !== before;
+  }
+
+  function trueResinOf(frame) {
+    if (!frame) return "";
+    if (frame.trueResin) return frame.trueResin;
+    return resinLib.fromPath(frame.path);
+  }
+
+  function callMatchesLabel(call, frame) {
+    if (!call || !frame) return false;
+    if (call === frame.true) return true;
+    const resin = trueResinOf(frame);
+    if (resin && call === resin) return true;
+    if (call === "plastic" && resinLib.order.slice(0, 3).indexOf(resin) !== -1) return true;
+    if (call === "metal" && resin === "OTHERS") return true;
+    return false;
+  }
+
+  function knownFrame(frame) {
+    if (!frame) return false;
+    if (frame.true === "metal" || frame.true === "plastic") return true;
+    return resinLib.order.indexOf(trueResinOf(frame)) !== -1;
+  }
+
+  function truthKey(frame) {
+    const resin = trueResinOf(frame);
+    const resinSink = graph.nodes.some((node) => (
+      node.type === "sink" && resinLib.order.indexOf(node.role) !== -1
+    ));
+    if (resinSink && resin) return resin;
+    return frame.true || resin || "";
+  }
+
+  function sortRole(role) {
+    return Boolean(role) && role !== "empty" && role !== "hold";
+  }
+
+  function preferRole(current, next, frame) {
+    if (!current) return next;
+    const currentSort = sortRole(current);
+    const nextSort = sortRole(next);
+    if (currentSort && callMatchesLabel(current, frame)) return current;
+    if (nextSort && callMatchesLabel(next, frame)) return next;
+    if (currentSort) return current;
+    if (nextSort) return next;
+    if (current === "empty" || next === "empty") return "empty";
+    return current || next;
+  }
+
+  async function fetchJson(url) {
+    const target = new URL(url, window.location.origin);
+    target.searchParams.set("_", String(Date.now()));
+    const response = await fetch(target, { cache: "no-store" });
+    if (!response.ok) throw new Error("load");
+    return response.json();
+  }
+
   async function loadBelt() {
     try {
-      const response = await fetch(root.dataset.beltUrl);
-      belt = await response.json();
+      belt = await fetchJson(root.dataset.beltUrl);
     } catch (error) {
       flowNote.textContent = "Could not load the belt cache.";
       belt = { ready: false, frames: [] };
@@ -800,16 +1019,32 @@ if (root) {
       try {
         const url = new URL(root.dataset.modelUrl, window.location.origin);
         url.searchParams.set("model", rel);
-        const response = await fetch(url);
-        loaded.set(rel, await response.json());
+        loaded.set(rel, await fetchJson(url));
       } catch (error) {
         loaded.set(rel, { ready: false, model: rel, frames: [] });
       }
     }));
     joinFrames();
-    graph.nodes.filter((node) => node.type === "model").forEach(refreshCard);
+    if (pruneWires()) saveDraft();
+    paintBoard();
     paintInspector();
     run();
+    paintScoreButton();
+  }
+
+  async function refreshScores() {
+    loaded.clear();
+    try {
+      belt = await fetchJson(root.dataset.beltUrl);
+    } catch (error) {
+      belt = { ready: false, frames: [] };
+    }
+    root.dataset.beltReady = belt && belt.ready ? "yes" : "no";
+    if (belt && Array.isArray(belt.defaults) && belt.defaults.length) catalog = belt.defaults;
+    await ensureModels();
+    modelRels().forEach((rel) => {
+      if (modelReady(rel)) scoredAtLoad.add(rel);
+    });
     paintScoreButton();
   }
 
@@ -821,6 +1056,7 @@ if (root) {
         path: frame.path,
         split: frame.split,
         true: frame.true || "",
+        trueResin: frame.resin || resinLib.fromPath(frame.path),
         scores: frame,
         models: {},
       });
@@ -830,7 +1066,14 @@ if (root) {
       (payload.frames || []).forEach((frame) => {
         let row = map.get(frame.path);
         if (!row) {
-          row = { path: frame.path, split: frame.split, true: frame.true || "", scores: {}, models: {} };
+          row = {
+            path: frame.path,
+            split: frame.split,
+            true: frame.true || "",
+            trueResin: resinLib.fromPath(frame.path),
+            scores: {},
+            models: {},
+          };
           map.set(frame.path, row);
         }
         row.models[rel] = frame;
@@ -873,7 +1116,8 @@ if (root) {
       ports: {},
       arrived: {},
       visits: record ? rows.map(() => []) : null,
-      bits: new Uint8Array(count),
+      roles: rows.map(() => ""),
+      holdMark: new Uint8Array(count),
       dropped: new Uint8Array(count),
       lastPred: rows.map(() => ""),
     };
@@ -889,9 +1133,10 @@ if (root) {
       const incoming = node.type === "input" ? everyone : unique(arrived[id]);
       result.arrived[id] = incoming;
       if (node.type === "sink") {
-        const bit = sinkBit(node.role);
+        const role = node.role || "hold";
         incoming.forEach((index) => {
-          if (bit) result.bits[index] |= bit;
+          result.roles[index] = preferRole(result.roles[index], role, rows[index]);
+          if (role === "hold") result.holdMark[index] = 1;
           if (record) result.visits[index].push({ nodeId: id, port: "in" });
         });
         result.ports[id + ":in"] = incoming;
@@ -928,7 +1173,10 @@ if (root) {
       return groups;
     }
     if (node.type === "model") {
-      const groups = { metal: [], plastic: [], uncertain: [], others: [] };
+      const groups = {};
+      portsOf(node).forEach((port) => {
+        groups[port] = [];
+      });
       const payload = node.model ? rows : null;
       incoming.forEach((index) => {
         const scores = payload && rows[index].models ? rows[index].models[node.model] : null;
@@ -937,7 +1185,7 @@ if (root) {
           return;
         }
         const decision = judge(scores, node);
-        result.lastPred[index] = scores.pred || result.lastPred[index];
+        result.lastPred[index] = predictedClass(scores, node);
         const port = groups[decision] ? decision : "others";
         groups[port].push(index);
       });
@@ -946,23 +1194,26 @@ if (root) {
     return {};
   }
 
+  function predictedClass(frame, node) {
+    const classes = modelClasses(node.model);
+    const resin = frame.resin || "";
+    if (resin && classes.indexOf(resin) !== -1) return resin;
+    const pred = frame.pred || "";
+    if (pred && classes.indexOf(pred) !== -1) return pred;
+    if (resin) return resin;
+    return pred || classes[0] || "metal";
+  }
+
   function judge(frame, node) {
     const confidence = Number(frame.confidence);
     const distance = Number(frame[node.mode]);
     const far = Number.isFinite(distance) && distance > Number(node.distance);
     const clash = node.clash && frame.disagree;
-    if (node.keepOn && confidence >= Number(node.keep)) return frame.pred || "metal";
+    const call = predictedClass(frame, node);
+    if (node.keepOn && confidence >= Number(node.keep)) return call;
     if (far || clash) return "others";
     if (confidence < Number(node.confidence)) return "uncertain";
-    return frame.pred || "metal";
-  }
-
-  function sinkBit(role) {
-    if (role === "metal") return METAL;
-    if (role === "plastic") return PLASTIC;
-    if (role === "empty") return EMPTY;
-    if (role === "hold") return HOLD;
-    return 0;
+    return call;
   }
 
   function topo(nodes, wires) {
@@ -991,17 +1242,9 @@ if (root) {
     return Array.from(new Set(list));
   }
 
-  function primaryFrom(bits, truth) {
-    const metal = bits & METAL;
-    const plastic = bits & PLASTIC;
-    if (metal || plastic) {
-      if (truth === "metal" && metal) return "metal";
-      if (truth === "plastic" && plastic) return "plastic";
-      return metal ? "metal" : "plastic";
-    }
-    if (bits & EMPTY) return "empty";
-    if (bits & HOLD) return "hold";
-    return "dropped";
+  function endedAs(index) {
+    if (!outcome || !outcome.roles) return "dropped";
+    return outcome.roles[index] || "dropped";
   }
 
   function summarize(rows, result) {
@@ -1015,10 +1258,7 @@ if (root) {
       holdCapCount: 0,
       heldRight: 0,
       caught: 0,
-      metalAccepted: 0,
-      metalHit: 0,
-      plasticAccepted: 0,
-      plasticHit: 0,
+      per: {},
       blankN: 0,
       blankCaught: 0,
       balanced: null,
@@ -1026,38 +1266,36 @@ if (root) {
     };
     if (!result || !result.order) return stats;
     rows.forEach((frame, index) => {
-      const bits = result.bits[index];
       const dropped = result.dropped[index];
-      const role = primaryFrom(bits, frame.true);
-      const known = frame.true === "metal" || frame.true === "plastic";
-      if ((bits & HOLD) || dropped) stats.holdCapCount += 1;
+      const role = result.roles[index] || (dropped ? "dropped" : "dropped");
+      const known = knownFrame(frame);
+      if (result.holdMark[index] || dropped) stats.holdCapCount += 1;
       if (frame.true === "empty") {
         stats.blankN += 1;
         if (role === "empty") stats.blankCaught += 1;
       }
       if (role === "empty") stats.empty += 1;
       if (role === "hold" || role === "dropped") stats.held += 1;
-      if (role === "metal" || role === "plastic") {
+      if (sortRole(role)) {
         stats.accepted += 1;
-        if (role === frame.true) stats.correct += 1;
+        const hit = callMatchesLabel(role, frame);
+        if (hit) stats.correct += 1;
         else if (known) stats.still += 1;
-        if (frame.true === "metal") {
-          stats.metalAccepted += 1;
-          if (role === "metal") stats.metalHit += 1;
-        }
-        if (frame.true === "plastic") {
-          stats.plasticAccepted += 1;
-          if (role === "plastic") stats.plasticHit += 1;
+        const key = truthKey(frame);
+        if (key) {
+          if (!stats.per[key]) stats.per[key] = { n: 0, hit: 0 };
+          stats.per[key].n += 1;
+          if (hit) stats.per[key].hit += 1;
         }
       } else if (known) {
         const pred = result.lastPred[index];
-        if (pred && pred === frame.true) stats.heldRight += 1;
-        else if (pred && pred !== frame.true) stats.caught += 1;
+        if (pred && callMatchesLabel(pred, frame)) stats.heldRight += 1;
+        else if (pred) stats.caught += 1;
       }
     });
-    const recalls = [];
-    if (stats.metalAccepted) recalls.push(stats.metalHit / stats.metalAccepted);
-    if (stats.plasticAccepted) recalls.push(stats.plasticHit / stats.plasticAccepted);
+    const recalls = Object.keys(stats.per)
+      .filter((key) => stats.per[key].n)
+      .map((key) => stats.per[key].hit / stats.per[key].n);
     stats.balanced = recalls.length
       ? recalls.reduce((sum, value) => sum + value, 0) / recalls.length
       : null;
@@ -1137,7 +1375,10 @@ if (root) {
   function photoButton(frame, index) {
     const button = document.createElement("button");
     button.type = "button";
+    const mark = endedAs(index);
+    const resinName = resinLib.colors[mark] ? mark : trueResinOf(frame);
     button.className = "photo-hit tone-" + tone(frame, index);
+    if (resinLib.colors[resinName]) button.dataset.resin = resinName;
     const image = document.createElement("img");
     image.alt = "";
     image.src = fileUrl(frame.path);
@@ -1150,11 +1391,11 @@ if (root) {
 
   function tone(frame, index) {
     if (!outcome) return "hold";
-    const role = primaryFrom(outcome.bits[index], frame.true);
+    const role = endedAs(index);
     if (role === "dropped") return "bad";
     if (role === "hold") return "hold";
-    if (role === "empty") return frame.true === "metal" || frame.true === "plastic" ? "warn" : "good";
-    return role === frame.true ? "good" : "bad";
+    if (role === "empty") return knownFrame(frame) ? "warn" : "good";
+    return callMatchesLabel(role, frame) ? "good" : "bad";
   }
 
   function openPhoto(frame, index) {
@@ -1165,7 +1406,7 @@ if (root) {
     dialog.querySelector("[data-view-caption]").textContent = frame.path;
     const detail = dialog.querySelector("[data-view-detail]");
     detail.replaceChildren();
-    const role = outcome ? primaryFrom(outcome.bits[index], frame.true) : "dropped";
+    const role = outcome ? endedAs(index) : "dropped";
     detail.appendChild(hint("Label " + (frame.true || "none") + ". Ended as " + role + "."));
     const path = document.createElement("ol");
     path.className = "flow-path";
@@ -1337,8 +1578,8 @@ if (root) {
       if (!reached.has(index)) return;
       const scores = frame.models[node.model];
       if (!scores) return;
-      if (frame.true !== "metal" && frame.true !== "plastic") return;
-      if (scores.pred !== frame.true) return;
+      if (!knownFrame(frame)) return;
+      if (!callMatchesLabel(predictedClass(scores, node), frame)) return;
       const value = Number(scores[mode]);
       if (Number.isFinite(value)) values.push(value);
     });
@@ -1412,7 +1653,8 @@ if (root) {
     return rels;
   }
 
-  function onScore(event) {
+  async function onScore(event) {
+    event.preventDefault();
     const host = scoreForm.querySelector("[data-score-models]");
     host.replaceChildren();
     modelRels().forEach((rel) => {
@@ -1424,19 +1666,56 @@ if (root) {
     });
     const beltReady = root.dataset.beltReady === "yes" || (belt && belt.ready);
     const missing = !beltReady || modelRels().some((rel) => !scoredAtLoad.has(rel) && !modelReady(rel));
-    if (missing) return;
-    if (!window.confirm("This scores these photos again and replaces the cache. Continue?")) {
-      event.preventDefault();
+    if (!missing) {
+      if (!window.confirm("This scores these photos again and replaces the cache. Continue?")) return;
+      let field = scoreForm.querySelector('input[name="confirm"]');
+      if (!field) {
+        field = document.createElement("input");
+        field.type = "hidden";
+        field.name = "confirm";
+        scoreForm.appendChild(field);
+      }
+      field.value = "yes";
+    }
+    if (scoreNote) scoreNote.textContent = "Starting…";
+    if (scoreButton) scoreButton.disabled = true;
+    let response;
+    try {
+      response = await fetch(scoreForm.action, {
+        method: "POST",
+        body: new FormData(scoreForm),
+        headers: { Accept: "application/json" },
+      });
+    } catch (error) {
+      if (scoreButton) scoreButton.disabled = false;
+      if (scoreNote) scoreNote.textContent = "Could not start scoring.";
       return;
     }
-    let field = scoreForm.querySelector('input[name="confirm"]');
-    if (!field) {
-      field = document.createElement("input");
-      field.type = "hidden";
-      field.name = "confirm";
-      scoreForm.appendChild(field);
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      payload = null;
     }
-    field.value = "yes";
+    if (!response.ok || !payload || !payload.ok) {
+      if (scoreButton) scoreButton.disabled = false;
+      if (scoreNote) scoreNote.textContent = (payload && payload.error) || "Could not start scoring.";
+      return;
+    }
+    if (scoreNote) scoreNote.textContent = "Scoring. The board fills in when the job finishes.";
+    try {
+      const status = await fetch("/jobs/status", { cache: "no-store" }).then((item) => item.json());
+      if (status && !status.running) {
+        await refreshScores();
+        if (scoreNote) {
+          scoreNote.textContent = status.exit_code
+            ? (status.status_line || "Scoring stopped.")
+            : "Scores are in. Move a card or a cut without scoring again.";
+        }
+      }
+    } catch (error) {
+      /* the job stream still refreshes the board when it finishes */
+    }
   }
 
   async function saveGraph(event) {

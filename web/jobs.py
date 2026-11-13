@@ -336,10 +336,29 @@ class Runner:
                 handle.write(line + "\n")
 
     def _note_status(self, line):
+        text = line.strip()
+        if text.startswith((
+            "belt ",
+            "Belt ",
+            "train:",
+            "validation:",
+            "test:",
+            "probe:",
+            "garbage:",
+            "Device ",
+            "Wrote ",
+            "Fit ",
+            "Reusing ",
+            "Empty-belt",
+            "Belt checks",
+            "Belt cache",
+            "Model cache",
+        )):
+            self.status_line = text
         if "batch " in line and "/" in line:
-            self.status_line = line.strip()
+            self.status_line = text
         if "balanced " in line:
-            self.status_line = line.strip()
+            self.status_line = text
 
     def _read(self):
         proc = self.proc

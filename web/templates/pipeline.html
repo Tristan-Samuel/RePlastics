@@ -4,7 +4,7 @@
 {% block body %}
   <div class="page-head">
     <h1>Pipeline</h1>
-    <p>Wire belt checks and checkpoints into the order production should run. A frame follows the wires. Two wires into one card is a join, so a later model can put a can back into the sort pile. Score once. After that, moving a card, a cut, or a confidence mark does not score again. Fit uses validation only. Test does not pick a cut. This page does not change the 0.85 hold.</p>
+    <p>Wire belt checks and checkpoints into the order production should run. A frame follows the wires. Two wires into one card is a join, so a later model can put a can back into the sort pile. Drag a toolbar button onto the board and the card lands where you drop it. Score stays on this page. After that, moving a card, a cut, or a confidence mark does not score again. A model card’s outputs are that checkpoint’s classes. Fit uses validation only. Test does not pick a cut. This page does not change the 0.85 hold.</p>
   </div>
 
   <section class="panel">
@@ -78,7 +78,7 @@
         <button type="submit">Save</button>
       </form>
     </div>
-    <p class="hint" data-flow-note>Click an output, then the next card’s input. Click a wire to remove it. An unwired output is a dropped pile.</p>
+    <p class="hint" data-flow-note>Drag a button onto the board to add a card. Click an output, then the next card’s input. Click a wire to remove it. An unwired output is a dropped pile.</p>
     <div class="flow-layout">
       <div class="flow-board" data-board>
         <div class="flow-canvas" data-canvas>
@@ -129,5 +129,5 @@
   <script type="application/json" id="pipeline-scored">{{ scored_models|tojson }}</script>
 {% endblock %}
 {% block scripts %}
-  <script src="{{ url_for('static', filename='pipeline.js') }}?v=2"></script>
+  <script src="{{ url_for('static', filename='pipeline.js') }}?v=4"></script>
 {% endblock %}

@@ -1,3 +1,45 @@
+const RESIN_ORDER = ["HDPE", "PET", "PP", "OTHERS"];
+const RESIN_COLORS = {
+  HDPE: "#3ee0c5",
+  PET: "#6aa7ff",
+  PP: "#f0b429",
+  OTHERS: "#c084fc",
+};
+const RESIN_FROM_FOLDER = {
+  hdpe: "HDPE",
+  pet: "PET",
+  pp: "PP",
+  others: "OTHERS",
+  other: "OTHERS",
+};
+
+function resinFromPath(path) {
+  const text = String(path || "");
+  const file = text.split("/").pop() || "";
+  const stem = file.replace(/\.[^.]+$/, "").toUpperCase();
+  for (let index = 0; index < RESIN_ORDER.length; index += 1) {
+    const resin = RESIN_ORDER[index];
+    if (stem.endsWith("_" + resin) || stem.endsWith("-" + resin)) return resin;
+  }
+  const parts = text.split("/");
+  for (let index = parts.length - 2; index >= 0; index -= 1) {
+    const key = parts[index].toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (RESIN_FROM_FOLDER[key]) return RESIN_FROM_FOLDER[key];
+  }
+  return "";
+}
+
+function resinColor(name) {
+  return RESIN_COLORS[name] || "";
+}
+
+window.labResin = {
+  order: RESIN_ORDER,
+  colors: RESIN_COLORS,
+  fromPath: resinFromPath,
+  color: resinColor,
+};
+
 const log = document.querySelector("#log");
 const logBody = document.querySelector("#log-body");
 const logToggle = document.querySelector("#log-toggle");
@@ -63,7 +105,8 @@ function updateStatus(state) {
     !state.running &&
     document.body.dataset.watchJob === "yes"
   ) {
-    window.location.reload();
+    const done = new CustomEvent("lab-job-done", { cancelable: true, detail: state });
+    if (document.dispatchEvent(done)) window.location.reload();
   }
 }
 
@@ -462,6 +505,57 @@ if (decide) {
     return true;
   }
 
+  function classNames(rows) {
+    const found = new Set();
+    rows.forEach((frame) => {
+      if (frame.true) found.add(frame.true);
+      if (frame.pred) found.add(frame.pred);
+    });
+    const resins = RESIN_ORDER.filter((name) => found.has(name));
+    if (resins.length) return resins;
+    return ["metal", "plastic"];
+  }
+
+  function syncClassFilter(rows) {
+    const labels = classNames(rows);
+    const current = classFilter.value;
+    classFilter.replaceChildren();
+    const any = document.createElement("option");
+    any.value = "any";
+    any.textContent = "Any";
+    classFilter.appendChild(any);
+    labels.forEach((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      classFilter.appendChild(option);
+    });
+    if (Array.from(classFilter.options).some((option) => option.value === current)) {
+      classFilter.value = current;
+    }
+  }
+
+  function paintScoreLegend(labels) {
+    const list = decide.querySelector("[data-score-legend]");
+    if (!list) return;
+    list.querySelectorAll("[data-legend-resin]").forEach((item) => item.remove());
+    const resinLabels = labels.filter((name) => RESIN_COLORS[name]);
+    const correct = list.querySelector('[data-legend="correct"]');
+    if (correct) correct.hidden = resinLabels.length > 0;
+    if (!resinLabels.length) return;
+    const anchor = list.querySelector('[data-legend="wrong"]') || correct;
+    resinLabels.forEach((name) => {
+      const item = document.createElement("li");
+      item.dataset.legendResin = name;
+      const swatch = document.createElement("i");
+      swatch.className = "swatch";
+      swatch.style.background = RESIN_COLORS[name];
+      item.append(swatch, document.createTextNode(name));
+      if (anchor) list.insertBefore(item, anchor);
+      else list.appendChild(item);
+    });
+  }
+
   function setFigure(name, value, detail, tone) {
     const tile = decide.querySelector(`[data-fig="${name}"]`);
     if (!tile) return;
@@ -474,24 +568,44 @@ if (decide) {
   function fillMatrix(rows, threshold) {
     const table = decide.querySelector("[data-matrix]");
     if (!table) return;
-    ["metal", "plastic"].forEach((truth) => {
-      const counts = { metal: 0, plastic: 0, uncertain: 0 };
+    const labels = classNames(rows);
+    const columns = labels.concat(["uncertain"]);
+    const head = table.querySelector("thead tr");
+    head.replaceChildren();
+    head.appendChild(document.createElement("th"));
+    columns.forEach((key) => {
+      const cell = document.createElement("th");
+      cell.textContent = key === "uncertain" ? "Uncertain" : key;
+      head.appendChild(cell);
+    });
+    const body = table.querySelector("tbody");
+    body.replaceChildren();
+    labels.forEach((truth) => {
+      const counts = {};
+      columns.forEach((key) => {
+        counts[key] = 0;
+      });
       rows.forEach((frame) => {
         if (frame.true !== truth) return;
         if (frame.score < threshold) counts.uncertain += 1;
-        else if (frame.pred === "plastic") counts.plastic += 1;
-        else counts.metal += 1;
+        else if (counts[frame.pred] !== undefined) counts[frame.pred] += 1;
+        else counts.uncertain += 1;
       });
-      const line = table.querySelector(`[data-row="${truth}"]`);
-      ["metal", "plastic", "uncertain"].forEach((key) => {
-        const cell = line.querySelector(`[data-cell="${key}"]`);
+      const line = document.createElement("tr");
+      const name = document.createElement("th");
+      name.textContent = "True " + truth;
+      line.appendChild(name);
+      columns.forEach((key) => {
+        const cell = document.createElement("td");
         cell.textContent = counts[key].toLocaleString("en-US");
         cell.classList.remove("hit", "miss", "hold", "zero");
         if (!counts[key]) cell.classList.add("zero");
         else if (key === "uncertain") cell.classList.add("hold");
         else if (key === truth) cell.classList.add("hit");
         else cell.classList.add("miss");
+        line.appendChild(cell);
       });
+      body.appendChild(line);
     });
   }
 
@@ -575,10 +689,17 @@ if (decide) {
   }
 
   function shortCall(frame) {
-    const mark = { metal: "M", plastic: "P" };
-    const left = mark[frame.true] || "?";
-    const right = mark[frame.pred] || "?";
+    const mark = { metal: "M", plastic: "P", HDPE: "HDPE", PET: "PET", PP: "PP", OTHERS: "OTH" };
+    const left = mark[frame.true] || frame.true || "?";
+    const right = mark[frame.pred] || frame.pred || "?";
     return left + "→" + right;
+  }
+
+  function resinMark(frame) {
+    if (RESIN_COLORS[frame.true]) return frame.true;
+    if (RESIN_COLORS[frame.pred]) return frame.pred;
+    if (RESIN_COLORS[frame.resin]) return frame.resin;
+    return "";
   }
 
   function paintReview() {
@@ -662,6 +783,8 @@ if (decide) {
     article.type = "button";
     article.className = frame.image ? "frame" : "frame no-photo";
     if (kind && kind !== "ok") article.dataset.kind = kind;
+    const marked = resinMark(frame);
+    if (marked) article.dataset.resin = marked;
     const name = frame.path.split("/").pop();
     const summary = caption(frame, showSplit);
     article.title = summary + " · " + name;
@@ -724,7 +847,7 @@ if (decide) {
     const heldRight = held.filter((frame) => frame.pred === frame.true);
     const accepted = rows.filter((frame) => frame.score >= threshold);
     const acceptedCorrect = accepted.filter((frame) => frame.pred === frame.true);
-    const recalls = ["metal", "plastic"]
+    const recalls = classNames(rows)
       .map((name) => {
         const subset = accepted.filter((frame) => frame.true === name);
         if (!subset.length) return null;
@@ -775,6 +898,7 @@ if (decide) {
     );
     renderStd(rows);
     fillMatrix(rows, threshold);
+    paintScoreLegend(classNames(rows));
     draw(rows, threshold, viewMin, viewMax);
     const filtered = rows.filter(passesFilter);
     const showSplit = split === "both";
@@ -817,14 +941,20 @@ if (decide) {
     const xOf = (score) => pad.l + ((score - viewMin) / span) * plotW;
     const binSize = 0.01;
     const binCount = Math.round(0.5 / binSize);
+    const labels = classNames(rows);
+    const resinLabels = labels.filter((name) => RESIN_COLORS[name]);
     const correct = new Array(binCount).fill(0);
     const missed = new Array(binCount).fill(0);
+    const byClass = resinLabels.map(() => new Array(binCount).fill(0));
     rows.forEach((frame) => {
       let index = Math.floor((frame.score - 0.5) / binSize);
       if (index < 0) index = 0;
       if (index >= binCount) index = binCount - 1;
-      if (frame.pred === frame.true) correct[index] += 1;
-      else missed[index] += 1;
+      if (frame.pred === frame.true) {
+        correct[index] += 1;
+        const slot = resinLabels.indexOf(frame.true);
+        if (slot >= 0) byClass[slot][index] += 1;
+      } else missed[index] += 1;
     });
     let peak = 1;
     for (let index = 0; index < binCount; index += 1) {
@@ -861,8 +991,20 @@ if (decide) {
       const correctH = (Math.log1p(correct[index]) / scale) * plotH;
       const wrongH = (Math.log1p(missed[index]) / scale) * plotH;
       const base = pad.t + plotH;
-      ctx.fillStyle = "#3ee0c5";
-      ctx.fillRect(left, base - correctH, barW, correctH);
+      if (resinLabels.length && correct[index]) {
+        let top = base;
+        resinLabels.forEach((name, slot) => {
+          const share = byClass[slot][index] / correct[index];
+          const height = correctH * share;
+          if (height <= 0) return;
+          top -= height;
+          ctx.fillStyle = RESIN_COLORS[name];
+          ctx.fillRect(left, top, barW, height);
+        });
+      } else {
+        ctx.fillStyle = "#3ee0c5";
+        ctx.fillRect(left, base - correctH, barW, correctH);
+      }
       if (missed[index]) {
         ctx.fillStyle = "#ff5d73";
         ctx.fillRect(left, base - wrongH, barW, wrongH);
@@ -990,6 +1132,7 @@ if (decide) {
       if (frames.some((frame) => frame.split === "excluded")) {
         excludedButton.hidden = false;
       }
+      syncClassFilter(frames);
       if (status) status.hidden = true;
       loaded = true;
       const frozenValue = decide.dataset.frozen;
@@ -1533,12 +1676,40 @@ if (openSet) {
     return judge(frame, currentRule()).decision;
   }
 
+  function truthKey(frame) {
+    if (frame.resin) {
+      const resin = frame.true_resin || resinFromPath(frame.path);
+      if (resin) return resin;
+    }
+    return frame.true || "";
+  }
+
+  function callKey(frame) {
+    if (frame.resin) return frame.resin;
+    return frame.pred || "";
+  }
+
+  function isRight(frame) {
+    const truth = truthKey(frame);
+    const call = callKey(frame);
+    return Boolean(truth) && truth === call;
+  }
+
   function known(frame) {
-    return frame.true === "metal" || frame.true === "plastic";
+    const key = truthKey(frame);
+    return key === "metal" || key === "plastic" || Boolean(RESIN_COLORS[key]);
   }
 
   function mistake(frame) {
-    return known(frame) && frame.pred !== frame.true;
+    return known(frame) && !isRight(frame);
+  }
+
+  function pointColor(frame) {
+    const key = truthKey(frame);
+    if (RESIN_COLORS[key]) return RESIN_COLORS[key];
+    if (key === "metal") return "#f0b429";
+    if (key === "plastic") return "#3ee0c5";
+    return "#c084fc";
   }
 
   function kindFor(frame) {
@@ -1574,17 +1745,12 @@ if (openSet) {
       uncertainRight: 0,
       uncertainWrong: 0,
       acceptedCorrect: 0,
-      metalAccepted: 0,
-      metalHit: 0,
-      plasticAccepted: 0,
-      plasticHit: 0,
       clash: 0,
       confidentMistakes: 0,
     };
-    const matrix = {
-      metal: { metal: 0, plastic: 0, uncertain: 0, others: 0 },
-      plastic: { metal: 0, plastic: 0, uncertain: 0, others: 0 },
-    };
+    const matrix = {};
+    const per = {};
+    const seen = new Set();
     const newly = [];
     const keptRows = [];
     rows.forEach((frame) => {
@@ -1599,8 +1765,11 @@ if (openSet) {
       else if (decision === "uncertain") stats.uncertain += 1;
       else stats.accepted += 1;
       if (!known(frame)) return;
+      const truth = truthKey(frame);
+      const callName = callKey(frame);
+      const right = truth === callName;
+      seen.add(truth);
       stats.known += 1;
-      const right = frame.pred === frame.true;
       if (!right) stats.wrong += 1;
       if (!right && call.confidence >= rule.floor) stats.confidentMistakes += 1;
       if (decision === "others") {
@@ -1619,28 +1788,25 @@ if (openSet) {
         if (right) stats.uncertainRight += 1;
         else stats.uncertainWrong += 1;
       }
-      const bucket = decision === "uncertain" || decision === "others"
-        ? decision
-        : (frame.pred === "plastic" ? "plastic" : "metal");
-      matrix[frame.true][bucket] += 1;
+      const bucket = decision === "uncertain" || decision === "others" ? decision : callName;
+      if (!matrix[truth]) matrix[truth] = {};
+      matrix[truth][bucket] = (matrix[truth][bucket] || 0) + 1;
       if (decision !== "uncertain" && decision !== "others") {
-        if (frame.true === "metal") {
-          stats.metalAccepted += 1;
-          if (frame.pred === "metal") stats.metalHit += 1;
-        } else if (frame.true === "plastic") {
-          stats.plasticAccepted += 1;
-          if (frame.pred === "plastic") stats.plasticHit += 1;
-        }
+        if (!per[truth]) per[truth] = { n: 0, hit: 0 };
+        per[truth].n += 1;
+        if (right) per[truth].hit += 1;
       }
     });
-    const recalls = [];
-    if (stats.metalAccepted) recalls.push(stats.metalHit / stats.metalAccepted);
-    if (stats.plasticAccepted) recalls.push(stats.plasticHit / stats.plasticAccepted);
+    const order = ["HDPE", "PET", "PP", "OTHERS", "metal", "plastic"];
+    const labels = order.filter((name) => seen.has(name));
+    const recalls = labels
+      .map((name) => (per[name] && per[name].n ? per[name].hit / per[name].n : null))
+      .filter((value) => value !== null);
     stats.balanced = recalls.length
       ? recalls.reduce((sum, value) => sum + value, 0) / recalls.length
       : null;
     stats.hold = stats.n ? (stats.uncertain + stats.others) / stats.n : 1;
-    return { stats, matrix, newly, keptRows };
+    return { stats, matrix, labels: labels.length ? labels : ["metal", "plastic"], newly, keptRows };
   }
 
   function paintList(host, countNode, rows) {
@@ -1656,21 +1822,64 @@ if (openSet) {
       : countLabel(rows.length);
   }
 
-  function fillOpenMatrix(matrix) {
+  function fillOpenMatrix(matrix, labels) {
     const table = openSet.querySelector("[data-matrix]");
     if (!table) return;
-    ["metal", "plastic"].forEach((truth) => {
-      const line = table.querySelector(`[data-row="${truth}"]`);
-      ["metal", "plastic", "uncertain", "others"].forEach((key) => {
-        const cell = line.querySelector(`[data-cell="${key}"]`);
-        const count = matrix[truth][key];
+    const names = labels && labels.length ? labels : ["metal", "plastic"];
+    const present = new Set(names);
+    names.forEach((truth) => {
+      Object.keys(matrix[truth] || {}).forEach((key) => {
+        if (key !== "uncertain" && key !== "others") present.add(key);
+      });
+    });
+    const columns = ["HDPE", "PET", "PP", "OTHERS", "metal", "plastic"]
+      .filter((name) => present.has(name))
+      .concat(["uncertain", "others"]);
+    const head = table.querySelector("thead tr");
+    head.replaceChildren();
+    head.appendChild(document.createElement("th"));
+    columns.forEach((key) => {
+      const cell = document.createElement("th");
+      cell.textContent = key === "uncertain" ? "Uncertain" : key === "others" ? "Others" : key;
+      head.appendChild(cell);
+    });
+    const body = table.querySelector("tbody");
+    body.replaceChildren();
+    names.forEach((truth) => {
+      const line = document.createElement("tr");
+      const title = document.createElement("th");
+      title.textContent = "True " + truth;
+      line.appendChild(title);
+      columns.forEach((key) => {
+        const cell = document.createElement("td");
+        const count = (matrix[truth] && matrix[truth][key]) || 0;
         cell.textContent = countLabel(count);
-        cell.classList.remove("hit", "miss", "hold", "zero");
         if (!count) cell.classList.add("zero");
         else if (key === "uncertain" || key === "others") cell.classList.add("hold");
         else if (key === truth) cell.classList.add("hit");
         else cell.classList.add("miss");
+        line.appendChild(cell);
       });
+      body.appendChild(line);
+    });
+  }
+
+  function paintOpenLegend(labels) {
+    const list = openSet.querySelector("[data-legend]");
+    if (!list) return;
+    list.querySelectorAll("[data-legend-class]").forEach((item) => item.remove());
+    const names = labels && labels.length ? labels : ["metal", "plastic"];
+    const anchor = list.querySelector("[data-legend-ring]");
+    names.forEach((name) => {
+      const item = document.createElement("li");
+      item.dataset.legendClass = name;
+      const swatch = document.createElement("i");
+      swatch.className = "swatch";
+      swatch.style.background = pointColor({ true: name, resin: "", path: "" });
+      const text = name === "metal" ? "Metal" : name === "plastic" ? "Plastic" : name;
+      item.append(swatch, document.createTextNode(text));
+      if (anchor) list.insertBefore(item, anchor);
+      else list.appendChild(item);
     });
   }
 
@@ -1706,7 +1915,9 @@ if (openSet) {
     button.type = "button";
     button.className = "frame";
     button.dataset.kind = kind;
-    const trueName = frame.true || "unlabeled";
+    const truth = truthKey(frame);
+    if (RESIN_COLORS[truth]) button.dataset.resin = truth;
+    const trueName = truth || frame.true || "unlabeled";
     button.title = `${kindLabel(kind)} · true ${trueName} · ${frame.path || ""}`;
     const img = document.createElement("img");
     img.loading = "lazy";
@@ -2153,9 +2364,7 @@ if (openSet) {
       points.push(point);
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
-      if (frame.true === "metal") ctx.fillStyle = "#f0b429";
-      else if (frame.true === "plastic") ctx.fillStyle = "#3ee0c5";
-      else ctx.fillStyle = "#c084fc";
+      ctx.fillStyle = pointColor(frame);
       ctx.fill();
       ctx.lineWidth = 1.15;
       ctx.strokeStyle = "#07090d";
@@ -2236,7 +2445,8 @@ if (openSet) {
       share(counts.uncertainWrong, rows.length),
       counts.uncertain ? `${countLabel(counts.uncertainWrong)} of ${countLabel(counts.uncertain)} uncertain` : "none uncertain"
     );
-    fillOpenMatrix(measured.matrix);
+    fillOpenMatrix(measured.matrix, measured.labels);
+    paintOpenLegend(measured.labels);
     note.textContent = SPLIT_NOTES[split] || "";
     const label = SCORE_LABELS[scoreKey] || "Distance";
     openSet.querySelector("[data-distance-label]").textContent = label;

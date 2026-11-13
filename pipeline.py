@@ -38,7 +38,7 @@ from open_set import (
     score_paths,
     suggestions_from,
 )
-from preprocess import readable_image_paths, true_class_from_path
+from preprocess import readable_image_paths, resin_from_path, true_class_from_path
 from trashnet import EXPECTED_CLASSES
 from web.paths import IMAGE_SUFFIXES, ROOT
 
@@ -192,6 +192,9 @@ def score_belt(records):
             "split": split,
             "true": true_name or "",
         }
+        resin = resin_from_path(path)
+        if resin:
+            row["resin"] = resin
         row.update(_pack_scores(scores))
         row["fourier"] = _none_or_number(fourier)
         row["nearest_blanks"] = _none_or_number(nearest)
@@ -326,6 +329,8 @@ def _keep_frame(row, split, true_name):
         "disagree": bool(row.get("disagree")),
         "nearest": row.get("nearest") or "",
     }
+    if row.get("resin"):
+        kept["resin"] = row["resin"]
     return kept
 
 
@@ -345,7 +350,11 @@ def _ranges(frames, suggestions):
     return ranges
 
 
-def _model_payload(model_path, data_dir, suggestions, suggestion_count, frames):
+def _class_list(idx_to_class):
+    return [idx_to_class[index] for index in range(len(idx_to_class))]
+
+
+def _model_payload(model_path, data_dir, suggestions, suggestion_count, frames, classes):
     stat = Path(model_path).stat()
     suggestions = {
         key: None if suggestions.get(key) is None else round(float(suggestions[key]), 6)
@@ -359,6 +368,7 @@ def _model_payload(model_path, data_dir, suggestions, suggestion_count, frames):
         "suggestion_count": int(suggestion_count or 0),
         "ranges": _ranges(frames, suggestions),
         "counts": _split_counts(frames),
+        "classes": list(classes or []),
         "model_mtime_ns": stat.st_mtime_ns,
         "model_size": stat.st_size,
         "frames": frames,
@@ -402,6 +412,7 @@ def _reuse_open_set(folder, model_path, data_dir):
         suggestions,
         payload.get("suggestion_count") or 0,
         frames,
+        _class_list(idx_to_class),
     )
 
 
@@ -468,6 +479,7 @@ def _build_model(model_path, data_dir):
         bank.suggestions,
         bank.suggestion_count,
         frames,
+        _class_list(idx_to_class),
     )
 
 
