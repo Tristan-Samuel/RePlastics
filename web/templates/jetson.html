@@ -1,47 +1,90 @@
 {% extends "base.html" %}
 {% block title %}Jetson{% endblock %}
+{% block watch %}yes{% endblock %}
 {% block body %}
   <div class="page-head">
     <h1>Jetson</h1>
-    <p>Make the ONNX file and the JSON next to it, then open that folder.</p>
+    <p>Pick a checkpoint. Make ONNX writes that network, then scores the test photos in PyTorch and in ONNX Runtime.</p>
   </div>
 
   <section class="panel">
     <h2>On this computer</h2>
-    <pre class="command" id="onnx-command">{{ export_command }}</pre>
-    <div class="buttons">
-      <button type="button" class="ghost" data-copy-from="onnx-command">Copy command</button>
-      <form method="post" action="{{ url_for('start_job') }}">
+    {% if check %}
+      <div class="check-result">
+        <p class="scores">
+          <span class="score"><span class="k">PyTorch</span> {{ check.torch_accuracy }}</span>
+          <span class="score"><span class="k">Balanced</span> {{ check.torch_balanced }}</span>
+          <span class="score"><span class="k">ONNX</span> {{ check.onnx_accuracy }}</span>
+          <span class="score"><span class="k">Balanced</span> {{ check.onnx_balanced }}</span>
+        </p>
+        {% if check.detail %}<p>{{ check.detail }}</p>{% endif %}
+        <p class="{% if check.failed %}warn-line{% else %}hint{% endif %}">{{ check.note }} · {{ check.when }}</p>
+      </div>
+    {% endif %}
+    {% if models and data_roots %}
+      <form id="onnx-form" class="form-grid" method="post" action="{{ url_for('start_job') }}">
         <input type="hidden" name="kind" value="onnx">
-        <input type="hidden" name="data_dir" value="data_belt_stage1">
-        <button>Make ONNX</button>
+        <label class="span-2">
+          Checkpoint
+          <select name="model">
+            {% for model in models %}
+              <option value="{{ model.rel }}" {% if model.rel == selected_model %}selected{% endif %}>{{ model.option_label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div id="model-preview" class="span-2 model-preview"></div>
+        <script type="application/json" id="model-catalog">{{ models|tojson }}</script>
+        <script type="application/json" id="onnx-files">{{ onnx_files|tojson }}</script>
+        <label class="span-2">
+          Test photos
+          <select name="data_dir">
+            {% for name in data_roots %}
+              <option value="{{ name }}" {% if name == selected_data %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="span-2 command-preview">
+          <p class="label">Command</p>
+          <pre class="command" id="onnx-command">{{ export_command }}</pre>
+        </div>
       </form>
-      {% if onnx_ready %}
-        <form method="post" action="{{ url_for('reveal') }}">
-          <input type="hidden" name="path" value="{{ onnx_rel }}">
+      <div class="buttons">
+        <button type="button" class="ghost" data-copy-from="onnx-command">Copy command</button>
+        <button form="onnx-form">Make ONNX</button>
+        <form id="onnx-check-form" method="post" action="{{ url_for('start_job') }}" {% if not onnx_ready %}hidden{% endif %}>
+          <input type="hidden" name="kind" value="onnx-check">
+          <input type="hidden" name="model" value="{{ selected_model }}">
+          <input type="hidden" name="data_dir" value="{{ selected_data }}">
+          <button>Check ONNX</button>
+        </form>
+        <form id="show-onnx" method="post" action="{{ url_for('reveal') }}" {% if not onnx_ready %}hidden{% endif %}>
+          <input type="hidden" name="path" id="onnx-path" value="{{ onnx_rel }}">
           <button class="ghost">Show ONNX in folder</button>
         </form>
-      {% endif %}
-      {% if json_ready %}
-        <form method="post" action="{{ url_for('reveal') }}">
-          <input type="hidden" name="path" value="{{ json_rel }}">
+        <form id="show-json" method="post" action="{{ url_for('reveal') }}" {% if not json_ready %}hidden{% endif %}>
+          <input type="hidden" name="path" id="json-path" value="{{ json_rel }}">
           <button class="ghost">Show JSON in folder</button>
         </form>
-      {% endif %}
-    </div>
-    {% if onnx_ready and json_ready %}
-      <p class="hint"><code>{{ onnx_rel }}</code> and <code>{{ json_rel }}</code></p>
+      </div>
+      <p class="hint" id="onnx-hint">
+        {% if onnx_ready and json_ready %}
+          <code>{{ onnx_rel }}</code> and <code>{{ json_rel }}</code>
+        {% elif onnx_rel %}
+          Make ONNX writes <code>{{ onnx_rel }}</code> and <code>{{ json_rel }}</code>.
+        {% endif %}
+      </p>
+      <p class="hint">Make ONNX writes the file and scores the test photos. Check ONNX scores the file already on disk. A finished check stays at the top of this page: accuracy, balanced accuracy, and whether any label changed. It stops when a label changes. A small logit gap that leaves the label alone is still a match. Those numbers are not the scores stored in the checkpoint. This check is float32 on this computer. The Jetson engine is float16, so a score can still shift a little there. The job log has the same lines.</p>
     {% else %}
-      <p class="hint">Those two files are not in <code>models/</code> yet.</p>
+      <p class="hint">Put a checkpoint in <code>models/</code> and a dataset folder next to it before exporting.</p>
     {% endif %}
   </section>
 
   <section class="panel">
     <h2>On the Jetson</h2>
-    <pre class="command" id="engine-command">/usr/src/tensorrt/bin/trtexec --onnx=resnext50_metal_plastic.onnx --saveEngine=/opt/replastics/resnext50_metal_plastic.engine --fp16</pre>
+    <pre class="command" id="engine-command">/usr/src/tensorrt/bin/trtexec --onnx={{ engine_onnx }} --saveEngine=/opt/replastics/{{ engine_stem }}.engine --fp16</pre>
     <div class="buttons">
       <button type="button" class="ghost" data-copy-from="engine-command">Copy command</button>
     </div>
-    <p class="hint">Copy the ONNX file and the JSON onto the Jetson, then run that there. The JSON holds the class index, temperature, and hold.</p>
+    <p class="hint">Copy the ONNX file and the JSON onto the Jetson, then run that there. The JSON holds the class index, temperature, and hold. Rebuild the engine on that Jetson after a new export.</p>
   </section>
 {% endblock %}

@@ -25,24 +25,17 @@ UNCERTAIN = "uncertain"
 # On validation, 0.85 holds 14 of 1,251 images (1.12%) and leaves
 # three errors sorted: 90.88% PP, 96.11% HDPE, and 99.06% HDPE.
 # The softer misses, 76.21% and 84.61%, stay held. 0.97 held 39.
+#
+# Those two numbers were fit on the 5 Oct belt checkpoint. The same
+# cutoff is used for every checkpoint: it is applied after the softmax,
+# so it does not depend on which file produced the logits.
 TEMPERATURE = 1.0118387937545776
 THRESHOLD = 0.85
 
-FROZEN_CHECKPOINT_NAMES = frozenset(
-    {
-        "resnext50_metal_plastic.pt",
-        "belt_stage1_layer4.pt",
-        "resnext50_metal_plastic_belt_stage1_layer4.pt",
-        "resnext50_metal_plastic_belt_stage1_layer4_20261005.pt",
-    }
-)
-
 
 def frozen_rule_applies(model_path):
-    """True for the belt stage 1 checkpoint these constants were fit on."""
-    path = Path(model_path)
-    names = {path.name, path.resolve().name}
-    return bool(names & FROZEN_CHECKPOINT_NAMES)
+    """True for every checkpoint. The hold is not tied to one filename."""
+    return Path(model_path).suffix == ".pt"
 
 
 def scoring_temperature():

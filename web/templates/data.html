@@ -35,17 +35,17 @@
   {% endfor %}
 
   <section class="card">
-    <h2>Belt 224 zip</h2>
-    <p>Builds <code>data_belt_stage1</code> and <code>{{ belt_zip }}</code>.</p>
+    <h2>Belt zip for T4</h2>
+    <p>Copies the photos now in <code>data_belt_stage1</code> into <code>{{ belt_zip }}</code>. Train and validation are belt photos. Test keeps the earlier belt photos and the 23 October cans. <code>removed_stage1</code> is not included, and this does not put those photos back.</p>
     <p>{% if belt_zip_exists %}The zip is already in Downloads.{% else %}The zip is not in Downloads yet.{% endif %}</p>
     <div class="buttons">
       <form
         method="post"
         action="{{ url_for('start_job') }}"
-        data-confirm="This rebuilds data_belt_stage1 and belt_stage1_224.zip in Downloads. Continue?"
+        data-confirm="This zips the photos now in data_belt_stage1 into belt_stage1_224.zip in Downloads. removed_stage1 stays out. Continue?"
       >
         <input type="hidden" name="kind" value="belt-zip">
-        <button class="primary">Build 224 zip</button>
+        <button class="primary">Zip current photos</button>
       </form>
       {% if belt_zip_exists %}
         <form method="post" action="{{ url_for('reveal') }}">

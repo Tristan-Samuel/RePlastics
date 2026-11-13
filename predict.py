@@ -1,17 +1,27 @@
 import argparse
 import random
+from collections import Counter
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch import nn
 from PIL import ImageDraw, ImageFont
-from torchvision.models import resnext50_32x4d
 
+from checkpoints import lab_class, read_checkpoint
+from decide import (
+    UNCERTAIN,
+    decide,
+    frozen_rule_applies,
+    scaled_probabilities,
+    scoring_temperature,
+    scoring_threshold,
+)
 from preprocess import (
     inference_transform,
     load_rgb,
+    readable_image_paths,
+    resin_from_path,
     tensor_to_display,
     true_class_from_path,
 )
@@ -98,6 +108,18 @@ def parse_args():
             "directory."
         ),
     )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help=(
+            "Hold the frame as uncertain when the winning "
+            "score is below this value. Every checkpoint "
+            "defaults to the threshold and temperature in "
+            "decide.py. This flag overrides the threshold "
+            "for one run."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -180,10 +202,17 @@ def collect_image_paths(locations):
     return paths
 
 
-def overlay_text(ranked, true_class=None):
+def overlay_text(ranked, true_class=None, resin=None, decision=None):
     lines = [f"{name}  {score:.0%}" for name, score in ranked]
+    if decision == UNCERTAIN:
+        lines.insert(0, "uncertain")
     if true_class is not None:
-        lines.append(f"true {true_class}")
+        true_line = f"true {true_class}"
+        if resin:
+            true_line += f" ({resin})"
+        lines.append(true_line)
+    elif resin:
+        lines.append(resin)
     return "\n".join(lines)
 
 
@@ -225,25 +254,24 @@ elif torch.backends.mps.is_available():
 else:
     device = torch.device("cpu")
 
-checkpoint = torch.load(
-    MODEL_PATH,
-    map_location=device,
-    weights_only=False,
-)
-
-class_to_idx = checkpoint["class_to_idx"]
-idx_to_class = {
-    index: name
-    for name, index in class_to_idx.items()
-}
-
-model = resnext50_32x4d(weights=None)
-model.fc = nn.Linear(model.fc.in_features, 2)
-model.load_state_dict(checkpoint["model_state_dict"])
-model = model.to(device)
-model.eval()
+model, class_to_idx, idx_to_class = read_checkpoint(MODEL_PATH, device)
 
 preprocess = inference_transform()
+if frozen_rule_applies(MODEL_PATH):
+    temperature = scoring_temperature()
+    threshold = scoring_threshold(args.threshold)
+else:
+    temperature = 1.0
+    threshold = None if args.threshold is None else float(args.threshold)
+    print(
+        "No frozen hold rule for this checkpoint. "
+        "Scores are the raw softmax."
+    )
+print(f"Temperature {temperature:.6f}")
+if threshold is None:
+    print("Uncertain threshold is unset; the winning class is used.")
+else:
+    print(f"Uncertain when the winning score is below {threshold:.2f}")
 
 if args.images:
     image_paths = collect_image_paths(args.images)
@@ -259,6 +287,7 @@ else:
     ]
     source_label = f"{test_dir} (test split)"
 
+image_paths = readable_image_paths(image_paths)
 if not image_paths:
     raise FileNotFoundError(
         "No images found. Pass --images or a dataset with a test split."
@@ -275,14 +304,21 @@ else:
         sample_paths = random.sample(image_paths, sample_count)
 
 mistakes = []
+held = []
 cells = []
 
+skipped = []
 with torch.no_grad():
     for image_path in sample_paths:
-        image = load_rgb(image_path)
+        try:
+            image = load_rgb(image_path)
+        except OSError as error:
+            print(f"skip {image_path}: {error}")
+            skipped.append(image_path)
+            continue
         image_tensor = preprocess(image).to(device)
         logits = model(image_tensor.unsqueeze(0))
-        probabilities = torch.softmax(logits, dim=1)[0]
+        probabilities = scaled_probabilities(logits, temperature)[0]
         ranked = sorted(
             (
                 (idx_to_class[index], probabilities[index].item())
@@ -291,42 +327,60 @@ with torch.no_grad():
             key=lambda item: item[1],
             reverse=True,
         )
-        predicted_class, confidence = ranked[0]
+        decision, confidence = decide(probabilities, threshold, idx_to_class)
+        predicted_class = ranked[0][0]
         true_class = true_class_from_path(image_path)
+        resin = resin_from_path(image_path)
         detail = " | ".join(
             f"{name} {score:.2%}" for name, score in ranked
         )
+        extras = []
+        if decision == UNCERTAIN:
+            extras.append("uncertain")
         if true_class is not None:
-            print(f"{image_path}: {detail} | true {true_class}")
+            extras.append(f"true {true_class}")
+        if resin:
+            extras.append(resin)
+        if extras:
+            print(f"{image_path}: {detail} | {' | '.join(extras)}")
         else:
             print(f"{image_path}: {detail}")
 
         is_mistake = (
-            true_class is not None and predicted_class != true_class
+            true_class is not None
+            and lab_class(predicted_class) != true_class
+            and decision != UNCERTAIN
         )
+        record = {
+            "path": image_path,
+            "true": true_class,
+            "resin": resin,
+            "predicted": predicted_class,
+            "decision": decision,
+            "confidence": confidence,
+            "ranked": ranked,
+            "tensor": image_tensor.detach().cpu(),
+        }
         if is_mistake:
-            mistakes.append(
-                {
-                    "path": image_path,
-                    "true": true_class,
-                    "predicted": predicted_class,
-                    "confidence": confidence,
-                    "ranked": ranked,
-                    "tensor": image_tensor.detach().cpu(),
-                }
-            )
+            mistakes.append(record)
+        if true_class is not None and decision == UNCERTAIN:
+            held.append(record)
 
         if not report_mistakes:
             cells.append(
                 paint_overlay(
                     tensor_to_display(image_tensor.cpu()),
-                    overlay_text(ranked, true_class),
+                    overlay_text(ranked, true_class, resin, decision),
                 )
             )
 
+if skipped:
+    print(f"Skipped {len(skipped)} unreadable image(s) during scoring.")
+
 if report_mistakes:
+    scored_paths = [path for path in sample_paths if path not in skipped]
     unlabeled = sum(
-        1 for path in sample_paths if true_class_from_path(path) is None
+        1 for path in scored_paths if true_class_from_path(path) is None
     )
     if unlabeled:
         print(
@@ -336,23 +390,70 @@ if report_mistakes:
     mistakes.sort(key=lambda item: item["confidence"], reverse=True)
     txt_path = args.mistakes_out.with_suffix(".txt")
     args.mistakes_out.parent.mkdir(parents=True, exist_ok=True)
+    labeled_by_resin = Counter()
+    for path in scored_paths:
+        if true_class_from_path(path) is None:
+            continue
+        labeled_by_resin[resin_from_path(path) or "unknown"] += 1
+    wrong_by_resin = Counter(
+        mistake["resin"] or "unknown" for mistake in mistakes
+    )
     with txt_path.open("w", encoding="utf-8") as report:
+        resin_keys = [
+            key
+            for key in ("HDPE", "PET", "PP", "OTHERS", "unknown")
+            if labeled_by_resin.get(key)
+        ]
+        if resin_keys:
+            report.write("# mistakes by resin\n")
+            print("Mistakes by resin:")
+            for key in resin_keys:
+                total = labeled_by_resin[key]
+                wrong = wrong_by_resin.get(key, 0)
+                line = f"{key}: {wrong}/{total} ({wrong / total:.1%})"
+                print(f"  {line}")
+                report.write(line + "\n")
+            report.write("\n")
         for mistake in mistakes:
+            resin_note = (
+                f" | resin: {mistake['resin']}" if mistake["resin"] else ""
+            )
             line = (
-                f"{mistake['path']} | true: {mistake['true']} | "
+                f"{mistake['path']} | true: {mistake['true']}{resin_note} | "
                 f"pred: {mistake['predicted']} "
                 f"({mistake['confidence']:.2%})"
             )
             print(line)
             report.write(line + "\n")
-    print(
-        f"{len(mistakes)} mistakes / {len(sample_paths) - unlabeled} labeled"
-    )
+        if held:
+            report.write("\n# held\n")
+            print("Held:")
+            for item in sorted(held, key=lambda row: row["confidence"]):
+                resin_note = (
+                    f" | resin: {item['resin']}" if item["resin"] else ""
+                )
+                line = (
+                    f"{item['path']} | true: {item['true']}{resin_note} | "
+                    f"argmax: {item['predicted']} "
+                    f"({item['confidence']:.2%}) | uncertain"
+                )
+                print(line)
+                report.write(line + "\n")
+    labeled_count = len(scored_paths) - unlabeled
+    print(f"{len(mistakes)} mistakes / {labeled_count} labeled")
+    if threshold is None:
+        print("No uncertain threshold; the winning class is used.")
+    else:
+        print(f"{len(held)} held / {labeled_count} labeled")
     print(f"Wrote {txt_path}")
     cells = [
         paint_overlay(
             tensor_to_display(mistake["tensor"]),
-            overlay_text(mistake["ranked"], mistake["true"]),
+            overlay_text(
+                mistake["ranked"],
+                mistake["true"],
+                mistake["resin"],
+            ),
         )
         for mistake in mistakes
     ]
@@ -363,6 +464,16 @@ if report_mistakes:
         show=not args.no_show,
     )
 else:
+    scored_paths = [path for path in sample_paths if path not in skipped]
+    labeled_count = sum(
+        1
+        for path in scored_paths
+        if true_class_from_path(path) is not None
+    )
+    if threshold is None:
+        print("No uncertain threshold; the winning class is used.")
+    else:
+        print(f"{len(held)} held / {labeled_count} labeled")
     save_grid(
         cells,
         f"224×224 model input\n{source_label}",

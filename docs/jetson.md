@@ -1,20 +1,22 @@
 # Jetson
 
-The belt loads a TensorRT engine built on the Jetson. The file you copy there is ONNX, exported on the training machine from `models/resnext50_metal_plastic.pt`.
+The belt loads a TensorRT engine built on the Jetson. The file you copy there is ONNX, exported on the training machine from the checkpoint you pick. The lab page is [Jetson](http://127.0.0.1:5050/jetson).
 
 ## Export
 
 ```bash
 pip install onnx onnxruntime
-python export_onnx.py --check --data-dir data_belt_stage1
+python export_onnx.py --model models/resnext50_metal_plastic.pt --check --data-dir data_belt_stage1
 ```
 
-That writes two files in `models/`:
+That writes two files next to the checkpoint, using its name:
 
 - `resnext50_metal_plastic.onnx` — ResNeXt-50, one image in, two logits out
 - `resnext50_metal_plastic.onnx.json` — class index, mean, std, temperature, threshold, and the checkpoint name
 
-`--check` scores two metal and two plastic test JPEGs with PyTorch and with ONNX Runtime, both through `inference_transform`. It stops if any logit differs by more than 1e-4. Pass `--images` to score specific photos instead.
+A different `--model` writes `models/<that stem>.onnx`, so one export does not replace another. `--out` sets the path yourself.
+
+`--check` scores every photo in `test/metal` and `test/plastic` with PyTorch and with ONNX Runtime, both through `inference_transform`. The Jetson page keeps that accuracy, balanced accuracy, and any label disagreement. The job log has the same lines. It stops when a label changes. A logit gap that leaves the label alone is still a match. Those scores are this run. They are not the numbers stored in the checkpoint. `--check-only` scores an ONNX file already on disk and does not write a new one. Pass `--images` to compare specific photos and skip the accuracy report. This check is float32. The Jetson engine built below is float16, so a score can still move a little on the device.
 
 `models/` is gitignored, same as the `.pt` files.
 

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Lab{% endblock %} · Metal / plastic</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=17">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=24">
 </head>
 <body
   data-running="{{ 'yes' if job_state.running else 'no' }}"
@@ -15,6 +15,9 @@
     <nav>
       <a href="{{ url_for('models_page') }}" {% if request.endpoint in ('models_page', 'model_page', 'saved_page') %}aria-current="page"{% endif %}>Models</a>
       <a href="{{ url_for('data_page') }}" {% if request.endpoint == 'data_page' %}aria-current="page"{% endif %}>Data</a>
+      <a href="{{ url_for('open_set_page') }}" {% if request.endpoint == 'open_set_page' %}aria-current="page"{% endif %}>Open set</a>
+      <a href="{{ url_for('belt_page') }}" {% if request.endpoint == 'belt_page' %}aria-current="page"{% endif %}>Belt</a>
+      <a href="{{ url_for('pipeline_page') }}" {% if request.endpoint == 'pipeline_page' %}aria-current="page"{% endif %}>Pipeline</a>
       <a href="{{ url_for('jobs_page') }}" {% if request.endpoint == 'jobs_page' %}aria-current="page"{% endif %}>Jobs</a>
       <a href="{{ url_for('jetson_page') }}" {% if request.endpoint == 'jetson_page' %}aria-current="page"{% endif %}>Jetson</a>
     </nav>
@@ -24,6 +27,7 @@
     {% block body %}{% endblock %}
   </main>
   {% include "_log.html" %}
-  <script src="{{ url_for('static', filename='app.js') }}?v=15"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=25"></script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

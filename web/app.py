@@ -28,14 +28,20 @@ from web.paths import (
     BELT_ZIP,
     DATA_ROOTS,
     DOWNLOADS,
+    IMAGE_SUFFIXES,
     ROOT,
     analysis_dir_allowed,
     image_allowed,
+    is_relative_inside,
     reveal_allowed,
 )
 from web.presets import PRESETS
 
+_UPLOAD_LIMIT = 25 * 1024 * 1024
+_PROBE_LIMIT = 1500
 _session = {"up": False, "label": "T4 …"}
+_probe_scorer = None
+_probe_lock = threading.Lock()
 _session_lock = threading.Lock()
 _watch_started = False
 
@@ -112,6 +118,164 @@ def create_app():
             onnx_files=_onnx_files(),
             check=latest_onnx_check(onnx_rel),
         )
+
+    @app.get("/open-set")
+    def open_set_page():
+        models = catalog.list_models()
+        data_roots = catalog.present_data_roots()
+        selected = _chosen_model(request.args.get("model"), models)
+        data_name = _chosen_data(request.args.get("data"))
+        model = next((item for item in models if item["rel"] == selected), None)
+        brief = catalog.open_set_brief(model) if model else None
+        return render_template(
+            "open_set.html",
+            models=models,
+            data_roots=data_roots,
+            selected_model=selected,
+            selected_data=data_name,
+            model=model,
+            brief=brief,
+        )
+
+    @app.get("/open-set/scores.json")
+    def open_set_scores():
+        models = catalog.list_models()
+        selected = _chosen_model(request.args.get("model"), models)
+        model = next((item for item in models if item["rel"] == selected), None)
+        if model is None:
+            abort(404)
+        path = catalog.open_set_scores_path(model)
+        if path is None:
+            return {"ready": False, "frames": []}
+        return send_file(path, mimetype="application/json")
+
+    @app.post("/open-set/probe")
+    def open_set_probe():
+        from PIL import UnidentifiedImageError
+
+        from open_set import OpenSetError
+
+        try:
+            models = catalog.list_models()
+            selected = _chosen_model(request.form.get("model"), models)
+            model = next(
+                (item for item in models if item["rel"] == selected),
+                None,
+            )
+            if model is None:
+                raise CommandError("Pick a checkpoint.")
+            brief = catalog.open_set_brief(model)
+            if brief is None:
+                raise CommandError("Build a bank before scoring photos.")
+            if brief["stale"]:
+                raise CommandError(
+                    "This checkpoint changed after the bank was built. Rerun first."
+                )
+            paths, skipped = _probe_paths()
+            frames = _scorer().score(
+                ROOT / model["rel"],
+                ROOT / brief["rel"],
+                paths,
+            )
+        except CommandError as error:
+            return {"ok": False, "error": str(error)}, 400
+        except OpenSetError as error:
+            return {"ok": False, "error": str(error)}, 400
+        except (OSError, UnidentifiedImageError) as error:
+            return {"ok": False, "error": f"Could not read that photo: {error}"}, 400
+        return {"ok": True, "frames": frames, "skipped": skipped}
+
+    @app.get("/belt")
+    def belt_page():
+        models = catalog.list_models()
+        data_roots = catalog.present_data_roots()
+        selected = _chosen_model(request.args.get("model"), models)
+        data_name = _chosen_data(request.args.get("data"))
+        model = next((item for item in models if item["rel"] == selected), None)
+        brief = catalog.presence_brief(model) if model else None
+        return render_template(
+            "belt.html",
+            models=models,
+            data_roots=data_roots,
+            selected_model=selected,
+            selected_data=data_name,
+            model=model,
+            brief=brief,
+        )
+
+    @app.get("/pipeline")
+    def pipeline_page():
+        from belt_checks import CHECKS
+
+        models = catalog.list_models()
+        data_roots = catalog.present_data_roots()
+        selected = _chosen_model(request.args.get("model"), models)
+        data_name = _chosen_data(request.args.get("data"))
+        return render_template(
+            "pipeline.html",
+            models=models,
+            model_choices=[
+                {
+                    "rel": item["rel"],
+                    "title": item["title"],
+                    "label": item["option_label"],
+                }
+                for item in models
+            ],
+            checks=list(CHECKS),
+            data_roots=data_roots,
+            selected_model=selected,
+            selected_data=data_name,
+            belt_ready=_belt_ready(data_name),
+            scored_models=_scored_model_rels(data_name, models),
+            graphs=_pipeline_graph_names(),
+        )
+
+    @app.get("/pipeline/belt.json")
+    def pipeline_belt():
+        data_name = _pipeline_data()
+        path = _belt_cache(data_name)
+        if not path.is_file():
+            return {"ready": False, "frames": [], "defaults": []}
+        return send_file(path, mimetype="application/json")
+
+    @app.get("/pipeline/model.json")
+    def pipeline_model():
+        from web.commands import _model_path
+
+        data_name = _pipeline_data()
+        try:
+            rel = _model_path(request.args.get("model"), must_exist=True)
+        except CommandError:
+            abort(404)
+        path = _model_cache(data_name, rel)
+        if not path.is_file():
+            return {"ready": False, "model": rel, "frames": []}
+        return send_file(path, mimetype="application/json")
+
+    @app.get("/pipeline/graphs/<name>")
+    def pipeline_graph(name):
+        path = _pipeline_graph_path(name)
+        if path is None or not path.is_file():
+            abort(404)
+        return send_file(path, mimetype="application/json")
+
+    @app.post("/pipeline/graphs")
+    def save_pipeline_graph():
+        payload = request.get_json(silent=True) or {}
+        name = payload.get("name") or ""
+        graph = payload.get("graph")
+        if _pipeline_graph_path(name) is None:
+            return {"ok": False, "error": "Use letters, numbers, and dashes in the name."}, 400
+        if not isinstance(graph, dict):
+            return {"ok": False, "error": "Missing the graph."}, 400
+        text = json.dumps({"name": name, "graph": graph}, indent=2)
+        if len(text) > 500_000:
+            return {"ok": False, "error": "That graph is too large."}, 400
+        path = _pipeline_graph_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text + "\n", encoding="utf-8")
+        return {"ok": True, "name": name}
 
     @app.get("/models")
     def models_page():
@@ -261,7 +425,8 @@ def create_app():
     @app.post("/jobs/start")
     def start_job():
         try:
-            prepared = prepare(request.form, require_confirm=True)
+            form = _job_form()
+            prepared = prepare(form, require_confirm=True)
             runner.start(prepared)
         except CommandError as error:
             return render_template("error.html", message=str(error)), 400
@@ -273,6 +438,11 @@ def create_app():
                 ),
                 409,
             )
+        if (form.get("kind") or "").strip() == "gradcam":
+            stem = Path(form.get("model") or "").stem
+            argv = prepared.argv
+            out = argv[argv.index("--out") + 1] if "--out" in argv else ""
+            return redirect(url_for("model_page", stem=stem, run=out))
         return _back()
 
     @app.post("/jobs/stop")
@@ -397,6 +567,258 @@ def _chosen_data(raw):
     if raw in DATA_ROOTS and (ROOT / raw).is_dir():
         return raw
     return _default_data()
+
+
+def _pipeline_data():
+    raw = (request.args.get("data") or "").strip()
+    if raw not in DATA_ROOTS or not (ROOT / raw).is_dir():
+        abort(404)
+    return raw
+
+
+def _belt_cache(data_name):
+    return ROOT / "analysis" / "pipeline-cache" / data_name / "belt.json"
+
+
+def _model_cache(data_name, rel):
+    return (
+        ROOT
+        / "analysis"
+        / "pipeline-cache"
+        / data_name
+        / "models"
+        / f"{Path(rel).stem}.json"
+    )
+
+
+def _belt_ready(data_name):
+    return _belt_cache(data_name).is_file()
+
+
+def _scored_model_rels(data_name, models):
+    ready = set()
+    folder = ROOT / "analysis" / "pipeline-cache" / data_name / "models"
+    if folder.is_dir():
+        ready = {path.stem for path in folder.glob("*.json")}
+    return [item["rel"] for item in models if item["stem"] in ready]
+
+
+_GRAPH_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,60}")
+
+
+def _pipeline_graph_path(name):
+    if not isinstance(name, str) or not _GRAPH_NAME.fullmatch(name):
+        return None
+    return ROOT / "analysis" / "pipelines" / f"{name}.json"
+
+
+def _pipeline_graph_names():
+    folder = ROOT / "analysis" / "pipelines"
+    if not folder.is_dir():
+        return []
+    names = []
+    for path in sorted(folder.glob("*.json")):
+        if _GRAPH_NAME.fullmatch(path.stem):
+            names.append(path.stem)
+    return names
+
+
+class _ImageForm:
+    """The posted form, with an uploaded photo added to the image list."""
+
+    def __init__(self, form, images):
+        self._form = form
+        self._images = images
+
+    def get(self, key, default=None):
+        if key == "images":
+            return self._images
+        return self._form.get(key, default)
+
+    def getlist(self, key):
+        return self._form.getlist(key)
+
+
+def _job_form():
+    upload = request.files.get("photo")
+    if upload is None or not (upload.filename or "").strip():
+        return request.form
+    saved = _save_upload(upload)
+    text = (request.form.get("images") or "").strip()
+    images = f"{text} {saved}".strip() if text else saved
+    return _ImageForm(request.form, images)
+
+
+def _scorer():
+    global _probe_scorer
+    with _probe_lock:
+        if _probe_scorer is None:
+            from web.probe import ProbeScorer
+
+            _probe_scorer = ProbeScorer()
+        return _probe_scorer
+
+
+def _probe_paths():
+    paths = []
+    skipped = []
+    for upload in request.files.getlist("photo"):
+        if upload is None or not (upload.filename or "").strip():
+            continue
+        paths.append(ROOT / _save_upload(upload))
+    folder = (request.form.get("folder") or "").strip()
+    if folder:
+        folder_paths, folder_skipped = _folder_images(folder)
+        paths.extend(folder_paths)
+        skipped.extend(folder_skipped)
+    if not paths:
+        if skipped:
+            raise CommandError(_unreadable_message(skipped))
+        raise CommandError("Add a photo or a folder.")
+    if len(paths) > _PROBE_LIMIT:
+        raise CommandError(f"Score at most {_PROBE_LIMIT} photos at a time.")
+    return paths, skipped
+
+
+def _folder_images(text):
+    if "\x00" in text:
+        raise CommandError("That folder is not on disk.")
+    path = Path(text)
+    if not path.is_absolute():
+        if ".." in path.parts:
+            raise CommandError("Folder has to stay a real path.")
+        path = (ROOT / path).resolve()
+    else:
+        path = path.resolve()
+    if is_relative_inside(path, ROOT / "models"):
+        raise CommandError("That folder is inside models/.")
+    if path.is_file():
+        if path.suffix.lower() not in IMAGE_SUFFIXES:
+            raise CommandError("Use a JPEG, PNG, or WebP.")
+        return [_servable_copy(path)], []
+    if not path.is_dir():
+        raise CommandError("That folder is not on disk.")
+    found = []
+    skipped = []
+    for item in path.rglob("*"):
+        if not item.is_file() or item.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        if not _image_readable(item):
+            skipped.append(_repo_display(item))
+            continue
+        found.append(item)
+        if len(found) > _PROBE_LIMIT:
+            raise CommandError(
+                f"That folder has more than {_PROBE_LIMIT} images."
+            )
+    if not found:
+        if skipped:
+            raise CommandError(_unreadable_message(skipped))
+        raise CommandError("That folder has no photos.")
+    found.sort()
+    skipped.sort()
+    return [_servable_copy(item) for item in found], skipped
+
+
+def _image_readable(path):
+    """False for a zero-byte or corrupt photo a folder score should skip."""
+    from PIL import Image
+    from PIL import UnidentifiedImageError
+
+    path = Path(path)
+    try:
+        if path.stat().st_size == 0:
+            return False
+        with Image.open(path) as image:
+            image.load()
+    except (OSError, UnidentifiedImageError):
+        return False
+    return True
+
+
+def _repo_display(path):
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(ROOT).as_posix()
+    except ValueError:
+        return resolved.name
+
+
+def _unreadable_message(skipped):
+    shown = ", ".join(skipped[:3])
+    more = len(skipped) - 3
+    tail = f", and {more} more" if more > 0 else ""
+    noun = "file" if len(skipped) == 1 else "files"
+    return (
+        f"Could not read {len(skipped)} empty or unreadable {noun}: "
+        f"{shown}{tail}."
+    )
+
+
+def _servable_copy(path):
+    resolved = Path(path).resolve()
+    if image_allowed(resolved):
+        return resolved
+    return ROOT / _copy_probe(resolved)
+
+
+def _copy_probe(src):
+    import shutil
+    from PIL import Image
+    from PIL import UnidentifiedImageError
+
+    src = Path(src)
+    suffix = src.suffix.lower()
+    if suffix not in IMAGE_SUFFIXES:
+        raise CommandError("Use a JPEG, PNG, or WebP.")
+    size = src.stat().st_size
+    if size == 0 or size > _UPLOAD_LIMIT:
+        raise CommandError("That image is empty or larger than 25 MB.")
+    safe = re.sub(r"[^A-Za-z0-9.-]+", "-", src.stem).strip(".-")[:60] or "photo"
+    folder = ROOT / "analysis" / "_uploads"
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = folder / f"{stamp}-{safe}{suffix}"
+    if dest.exists():
+        dest = folder / f"{stamp}-{time.time_ns()}-{safe}{suffix}"
+    shutil.copyfile(src, dest)
+    try:
+        with Image.open(dest) as image:
+            image.verify()
+    except (OSError, UnidentifiedImageError):
+        dest.unlink(missing_ok=True)
+        raise CommandError("That file is not a readable image.")
+    return dest.relative_to(ROOT).as_posix()
+
+
+def _save_upload(upload):
+    from PIL import Image
+    from PIL import UnidentifiedImageError
+
+    name = Path(upload.filename or "").name
+    suffix = Path(name).suffix.lower()
+    if suffix not in IMAGE_SUFFIXES:
+        raise CommandError("Use a JPEG, PNG, or WebP.")
+    raw_stem = Path(name).stem
+    safe = re.sub(r"[^A-Za-z0-9.-]+", "-", raw_stem).strip(".-")[:60] or "photo"
+    folder = ROOT / "analysis" / "_uploads"
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = folder / f"{stamp}-{safe}{suffix}"
+    if dest.exists():
+        raise CommandError("That upload name is already in use. Try again.")
+    upload.save(dest)
+    size = dest.stat().st_size
+    if size == 0 or size > _UPLOAD_LIMIT:
+        dest.unlink(missing_ok=True)
+        raise CommandError("That image is empty or larger than 25 MB.")
+    try:
+        with Image.open(dest) as image:
+            image.verify()
+    except (OSError, UnidentifiedImageError):
+        dest.unlink(missing_ok=True)
+        raise CommandError("That file is not a readable image.")
+    return dest.relative_to(ROOT).as_posix()
 
 
 def _form_path(raw):

@@ -98,6 +98,16 @@
     {% endif %}
   </section>
 
+  {% if run.unlabeled %}
+    <section id="cam-any">
+      <h2>Grad-CAM</h2>
+      <p class="hint">Photos with no metal or plastic folder. The figure is the predicted class.</p>
+      <div class="grid">
+        {% for card in run.unlabeled %}{{ figure(card) }}{% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
   <section id="maps">
     <h2>Feature maps</h2>
     {% if run.maps %}

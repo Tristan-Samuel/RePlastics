@@ -11,6 +11,7 @@ data/
 data_real/
 data_sep16/
 data_belt_stage1/
+data_belt_oct23/
 
 # Colab helper temp files
 .colab_*

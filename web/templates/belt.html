@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Belt{% endblock %}
+{% block watch %}yes{% endblock %}
+{% block body %}
+  <div class="page-head">
+    <h1>Belt</h1>
+    <p>A frame is <strong>empty</strong> when the belt has nothing large enough to sort. Area under the cut is empty on its own. A smaller area is also empty when the pooled vector sits near the blank centroid. Validation picks both cuts. This page does not change the 0.85 hold.</p>
+  </div>
+
+  <section class="panel">
+    <h2>Gate</h2>
+    {% if models and data_roots %}
+      <form method="get" class="form-grid" action="{{ url_for('belt_page') }}">
+        <label class="span-2">
+          Checkpoint
+          <select name="model" onchange="this.form.submit()">
+            {% for item in models %}
+              <option value="{{ item.rel }}" {% if item.rel == selected_model %}selected{% endif %}>{{ item.option_label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="span-2">
+          Dataset
+          <select name="data" onchange="this.form.submit()">
+            {% for name in data_roots %}
+              <option value="{{ name }}" {% if name == selected_data %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
+      <form
+        id="presence-build"
+        method="post"
+        action="{{ url_for('start_job') }}"
+        {% if brief %}data-confirm="This scores the locked test split again. Continue?"{% endif %}
+      >
+        <input type="hidden" name="kind" value="presence">
+        <input type="hidden" name="model" value="{{ selected_model }}">
+        <input type="hidden" name="data_dir" value="{{ selected_data }}">
+      </form>
+      <div class="buttons">
+        <button form="presence-build">{% if brief %}Rerun{% else %}Build{% endif %}</button>
+      </div>
+      {% if brief %}
+        {% set rates = brief.rates %}
+        {% set blank_range = brief.area_ranges.blank %}
+        {% set val_range = brief.area_ranges.validation %}
+        <p class="hint">
+          Fit on <code>{{ brief.blanks_dir }}</code>
+          ({{ rates.blank_n or 0 }} photos, {{ rates.outlier_n or 0 }} left out).
+          Validation {{ rates.validation_n or 0 }},
+          test {{ rates.test_n or 0 }}.
+          Downscale width {{ brief.downscale_width }},
+          deviation {{ brief.deviation_threshold }}.
+          Gaussian sigma is 1/{{ brief.sigma_divisor|int }} of the frame width.
+          Frames wider than {{ brief.illumination_width }} are resized before that blur.
+        </p>
+        <p class="hint">
+          Blank area {{ blank_range.min }}–{{ blank_range.max }}
+          (median {{ blank_range.median }}).
+          Validation area {{ val_range.min }}–{{ val_range.max }}
+          (median {{ val_range.median }}).
+          Area cut {{ '%.0f'|format(brief.area_cut) }}.
+          Loose area {{ '%.1f'|format(brief.area_loose) }}
+          is the 5th percentile of validation.
+          Blank distance cut {{ '%.4f'|format(brief.blank_cut) }}
+          is the 1st percentile of validation distances.
+          Area alone held {{ rates.validation_hard or 0 }}.
+          Area and the blank distance held {{ rates.validation_soft or 0 }} more.
+        </p>
+        {% if brief.note %}
+          <p class="warn-line">{{ brief.note }}</p>
+        {% endif %}
+        {% if brief.data_dir != selected_data %}
+          <p class="warn-line">This gate was fit on {{ brief.data_dir }}. Rerun to use {{ selected_data }}.</p>
+        {% endif %}
+        {% if brief.stale %}
+          <p class="warn-line">This checkpoint changed after the gate was built. Rerun before reading these cuts.</p>
+        {% endif %}
+      {% else %}
+        <p>No gate for this checkpoint yet. Build measures foreground area, drops blank frames that are much larger than the other blanks, fits a centroid on the rest, and scores validation and test. The area cut is the highest blank catch that holds at most 1% of validation. Test does not pick that cut.</p>
+      {% endif %}
+    {% else %}
+      <p class="hint">Put a checkpoint in <code>models/</code> and a dataset folder next to it.</p>
+    {% endif %}
+  </section>
+
+  {% if brief %}
+    {% set rates = brief.rates %}
+    <section>
+      <div class="metrics">
+        <div class="metric accent">
+          <span class="num">{{ rates.blank_caught or 0 }}/{{ rates.blank_n or 0 }}</span>
+          <span class="lbl">Blanks caught</span>
+        </div>
+        <div class="metric warn">
+          <span class="num">{{ rates.validation_held or 0 }}/{{ rates.validation_n or 0 }}</span>
+          <span class="lbl">Validation held</span>
+        </div>
+        <div class="metric">
+          <span class="num">{{ rates.test_held or 0 }}/{{ rates.test_n or 0 }}</span>
+          <span class="lbl">Test held</span>
+        </div>
+      </div>
+
+      {% if brief.outliers %}
+        <h2>Left out of the centroid</h2>
+        <p class="hint">These blank files are larger than the blank median plus 3 MAD. They are not in the catch count.</p>
+        <div class="grid">
+          {% for row in brief.outliers %}
+            <article class="frame">
+              {% if row.rel %}
+                <a href="{{ url_for('files', rel=row.rel) }}">
+                  <img src="{{ url_for('files', rel=row.rel) }}" alt="{{ row.path }}" loading="lazy">
+                </a>
+              {% endif %}
+              <p>area {{ row.area }} · blank {{ '%.4f'|format(row.blank) }}</p>
+              <p class="path">{{ row.path }}</p>
+            </article>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <h2>Missed blanks</h2>
+      {% if brief.missed %}
+        <div class="grid">
+          {% for row in brief.missed %}
+            <article class="frame">
+              {% if row.rel %}
+                <a href="{{ url_for('files', rel=row.rel) }}">
+                  <img src="{{ url_for('files', rel=row.rel) }}" alt="{{ row.path }}" loading="lazy">
+                </a>
+              {% endif %}
+              <p>area {{ row.area }} · blank {{ '%.4f'|format(row.blank) }}</p>
+              <p class="path">{{ row.path }}</p>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="hint">Every audited blank was called empty.</p>
+      {% endif %}
+
+      <h2>Validation objects held</h2>
+      {% if brief.held %}
+        <div class="grid">
+          {% for row in brief.held %}
+            <article class="frame">
+              {% if row.rel %}
+                <a href="{{ url_for('files', rel=row.rel) }}">
+                  <img src="{{ url_for('files', rel=row.rel) }}" alt="{{ row.path }}" loading="lazy">
+                </a>
+              {% endif %}
+              <p>{{ row.true }} · area {{ row.area }} · blank {{ '%.4f'|format(row.blank) }}{% if row.reason == "soft" %} · area and blank{% else %} · area{% endif %}</p>
+              <p class="path">{{ row.path }}</p>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="hint">No validation object was called empty.</p>
+      {% endif %}
+    </section>
+  {% endif %}
+{% endblock %}

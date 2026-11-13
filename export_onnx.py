@@ -11,10 +11,15 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch import nn
-from torchvision.models import resnext50_32x4d
 
-from decide import frozen_rule_applies, scoring_temperature, scoring_threshold
+from checkpoints import read_checkpoint
+from decide import (
+    decide,
+    frozen_rule_applies,
+    scaled_probabilities,
+    scoring_temperature,
+    scoring_threshold,
+)
 from preprocess import (
     IMAGENET_MEAN,
     IMAGENET_STD,
@@ -26,12 +31,10 @@ from trashnet import EXPECTED_CLASSES, split_dirs_for
 
 
 DEFAULT_MODEL_PATH = Path("models/resnext50_metal_plastic.pt")
-DEFAULT_ONNX_PATH = Path("models/resnext50_metal_plastic.onnx")
 DEFAULT_DATA_DIR = Path("data_belt_stage1")
 OPSET = 17
 INPUT_NAME = "image"
 OUTPUT_NAME = "logits"
-LOGIT_ATOL = 1e-4
 CHECK_PER_CLASS = 2
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -55,18 +58,27 @@ def parse_args():
     parser.add_argument(
         "--out",
         type=Path,
-        default=DEFAULT_ONNX_PATH,
+        default=None,
         help=(
-            "ONNX path. The JSON sidecar is this path "
-            "plus .json."
+            "ONNX path. Default: the checkpoint path with "
+            ".onnx. The JSON sidecar is this path plus .json."
         ),
     )
     parser.add_argument(
         "--check",
         action="store_true",
         help=(
-            "Score a few JPEGs with PyTorch and ONNX Runtime. "
-            "Stop if logits differ by more than 1e-4."
+            "Score the test split with PyTorch and ONNX Runtime. "
+            "Print accuracy and stop if a label changes. "
+            "With --images, only those photos are compared."
+        ),
+    )
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help=(
+            "Score an ONNX file already on disk. "
+            "Do not write a new graph or JSON."
         ),
     )
     parser.add_argument(
@@ -95,29 +107,15 @@ def sidecar_path(onnx_path):
 def load_checkpoint(model_path):
     if not model_path.is_file():
         raise SystemExit(f"Checkpoint not found: {model_path}")
-    checkpoint = torch.load(
-        model_path,
-        map_location="cpu",
-        weights_only=False,
-    )
-    class_to_idx = checkpoint.get("class_to_idx")
-    state_dict = checkpoint.get("model_state_dict")
-    if not isinstance(class_to_idx, dict) or not class_to_idx:
-        raise SystemExit(f"{model_path} has no class_to_idx.")
-    if state_dict is None:
-        raise SystemExit(f"{model_path} has no model_state_dict.")
-    class_to_idx = {
-        str(name): int(index) for name, index in class_to_idx.items()
-    }
+    try:
+        model, class_to_idx, _idx_to_class = read_checkpoint(model_path, "cpu")
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
     if len(class_to_idx) != 2:
         raise SystemExit(
-            f"{model_path} has {len(class_to_idx)} classes. "
+            f"{model_path.name} has {len(class_to_idx)} classes. "
             "This export is the 2-class belt head."
         )
-    model = resnext50_32x4d(weights=None)
-    model.fc = nn.Linear(model.fc.in_features, 2)
-    model.load_state_dict(state_dict)
-    model.eval()
     return model, class_to_idx
 
 
@@ -213,6 +211,246 @@ def check_images(data_dir, images):
     return chosen
 
 
+def test_rows(data_dir):
+    """Every labeled test photo, in class order then filename order."""
+    rows = []
+    for class_name in EXPECTED_CLASSES:
+        folder = split_dirs_for(data_dir)["test"] / class_name
+        if not folder.is_dir():
+            raise SystemExit(
+                f"Missing {folder}. The accuracy check reads "
+                "test/metal and test/plastic."
+            )
+        found = [
+            path
+            for path in sorted(folder.iterdir())
+            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+        ]
+        if not found:
+            raise SystemExit(f"{folder} has no images.")
+        rows.extend((path, class_name) for path in found)
+    return rows
+
+
+def classification_scores(true_names, pred_names, class_names):
+    """Overall accuracy, balanced accuracy, and per-class correct/total."""
+    total = len(true_names)
+    correct = sum(
+        true == pred for true, pred in zip(true_names, pred_names)
+    )
+    parts = []
+    recalls = []
+    for name in class_names:
+        class_total = sum(true == name for true in true_names)
+        class_correct = sum(
+            true == name and pred == name
+            for true, pred in zip(true_names, pred_names)
+        )
+        if class_total == 0:
+            continue
+        recalls.append(class_correct / class_total)
+        parts.append(f"{name} {class_correct}/{class_total}")
+    balanced = sum(recalls) / len(recalls) if recalls else 0.0
+    accuracy = correct / total if total else 0.0
+    return accuracy, balanced, parts
+
+
+def _show_path(path):
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _print_scores(title, true_names, pred_names, class_names):
+    accuracy, balanced, parts = classification_scores(
+        true_names,
+        pred_names,
+        class_names,
+    )
+    detail = " | ".join(parts)
+    print(
+        f"{title}: accuracy {accuracy:.2%} | "
+        f"balanced {balanced:.2%}"
+        + (f" | {detail}" if detail else ""),
+        flush=True,
+    )
+    return accuracy, balanced
+
+
+def compare_test_split(model, onnx_path, data_dir, class_to_idx, contract):
+    """Score every test photo in PyTorch and in ONNX Runtime.
+
+    Accuracy here is argmax on the class index. The hold is reported
+    separately, with the temperature and threshold stored in the JSON.
+    """
+    missing = [
+        name for name in EXPECTED_CLASSES if name not in class_to_idx
+    ]
+    if missing:
+        raise SystemExit(
+            f"class_to_idx has no {', '.join(missing)}."
+        )
+    rows = test_rows(data_dir)
+    temperature, threshold = contract
+    idx_to_class = {
+        index: name for name, index in class_to_idx.items()
+    }
+    class_names = [
+        name
+        for name, _index in sorted(
+            class_to_idx.items(),
+            key=lambda item: item[1],
+        )
+    ]
+    try:
+        import onnxruntime as ort
+    except ImportError as error:
+        raise SystemExit(
+            "The accuracy check needs onnxruntime: "
+            "pip install onnx onnxruntime"
+        ) from error
+    session = ort.InferenceSession(
+        str(onnx_path),
+        providers=["CPUExecutionProvider"],
+    )
+    preprocess = inference_transform()
+    total = len(rows)
+    print(
+        f"Scoring {total} test image(s) in {data_dir} "
+        "with PyTorch and ONNX Runtime.",
+        flush=True,
+    )
+    if threshold is None:
+        print(
+            f"Temperature {temperature:.6f}. No hold threshold.",
+            flush=True,
+        )
+    else:
+        print(
+            f"Temperature {temperature:.6f}. "
+            f"Hold when the winning score is under {threshold}.",
+            flush=True,
+        )
+    true_names = []
+    torch_preds = []
+    onnx_preds = []
+    torch_holds = []
+    onnx_holds = []
+    mismatches = []
+    worst = 0.0
+    skipped = 0
+    with torch.no_grad():
+        for image_path, class_name in rows:
+            try:
+                image = load_rgb(image_path)
+            except OSError as error:
+                print(f"skip {image_path}: {error}", flush=True)
+                skipped += 1
+                continue
+            tensor = preprocess(image).unsqueeze(0)
+            torch_logits = model(tensor).detach().cpu().numpy()
+            onnx_logits = session.run(
+                None,
+                {INPUT_NAME: tensor.numpy()},
+            )[0]
+            diff = float(np.max(np.abs(torch_logits - onnx_logits)))
+            worst = max(worst, diff)
+            torch_index = int(np.argmax(torch_logits, axis=-1).reshape(-1)[0])
+            onnx_index = int(np.argmax(onnx_logits, axis=-1).reshape(-1)[0])
+            torch_name = idx_to_class[torch_index]
+            onnx_name = idx_to_class[onnx_index]
+            torch_probs = scaled_probabilities(
+                torch.from_numpy(torch_logits),
+                temperature,
+            )[0]
+            onnx_probs = scaled_probabilities(
+                torch.from_numpy(onnx_logits),
+                temperature,
+            )[0]
+            torch_hold, _torch_score = decide(
+                torch_probs,
+                threshold,
+                idx_to_class,
+            )
+            onnx_hold, _onnx_score = decide(
+                onnx_probs,
+                threshold,
+                idx_to_class,
+            )
+            true_names.append(class_name)
+            torch_preds.append(torch_name)
+            onnx_preds.append(onnx_name)
+            torch_holds.append(torch_hold)
+            onnx_holds.append(onnx_hold)
+            checked = len(true_names)
+            if torch_name != onnx_name or torch_hold != onnx_hold:
+                mismatches.append(
+                    (
+                        _show_path(image_path),
+                        torch_name,
+                        onnx_name,
+                        torch_hold,
+                        onnx_hold,
+                    )
+                )
+            if checked % 25 == 0 or checked == total - skipped:
+                print(
+                    f"  test batch {checked}/{total - skipped}",
+                    flush=True,
+                )
+    if skipped:
+        print(f"Skipped {skipped} unreadable image(s).", flush=True)
+    if not true_names:
+        raise SystemExit("No readable test images for the accuracy check.")
+    print(
+        "Argmax accuracy on this test split "
+        "(not the scores stored in the checkpoint):",
+        flush=True,
+    )
+    _print_scores("PyTorch", true_names, torch_preds, class_names)
+    _print_scores("ONNX", true_names, onnx_preds, class_names)
+    argmax_disagree = sum(
+        left != right for left, right in zip(torch_preds, onnx_preds)
+    )
+    hold_disagree = sum(
+        left != right for left, right in zip(torch_holds, onnx_holds)
+    )
+    torch_uncertain = sum(label == "uncertain" for label in torch_holds)
+    onnx_uncertain = sum(label == "uncertain" for label in onnx_holds)
+    print(
+        f"Argmax disagreements: {argmax_disagree}. "
+        f"Hold disagreements: {hold_disagree}. "
+        f"Uncertain: PyTorch {torch_uncertain}, ONNX {onnx_uncertain}.",
+        flush=True,
+    )
+    print(
+        f"Worst max abs logit diff {worst:.3e}.",
+        flush=True,
+    )
+    shown = mismatches[:8]
+    for path, torch_name, onnx_name, torch_hold, onnx_hold in shown:
+        print(
+            f"disagree {path}: argmax {torch_name} vs {onnx_name}, "
+            f"hold {torch_hold} vs {onnx_hold}",
+            flush=True,
+        )
+    hidden = len(mismatches) - len(shown)
+    if hidden > 0:
+        print(f"and {hidden} more disagreement(s).", flush=True)
+    if argmax_disagree or hold_disagree:
+        raise SystemExit(
+            "ONNX labels do not match PyTorch on this test split. "
+            "Leave this file off the Jetson."
+        )
+    print(
+        f"ONNX matches PyTorch on {len(true_names)} test image(s): "
+        "same argmax, same hold. "
+        f"Worst logit diff {worst:.3e}.",
+        flush=True,
+    )
+
+
 def compare_logits(model, onnx_path, image_paths):
     try:
         import onnxruntime as ort
@@ -247,21 +485,41 @@ def compare_logits(model, onnx_path, image_paths):
             print(f"{image_path}: max abs logit diff {diff:.3e}")
     if checked == 0:
         raise SystemExit("No readable images for the logit check.")
-    if worst > LOGIT_ATOL:
-        raise SystemExit(
-            f"ONNX logits differ from PyTorch by {worst:.3e}, "
-            f"above {LOGIT_ATOL:.0e}. "
-            "Leave this file off the Jetson."
-        )
     print(
         f"Checked {checked} image(s). "
         f"Worst max abs logit diff {worst:.3e}."
     )
 
 
+def _run_check(args, model, class_to_idx):
+    if args.images:
+        compare_logits(
+            model,
+            args.out,
+            check_images(args.data_dir, args.images),
+        )
+        return
+    compare_test_split(
+        model,
+        args.out,
+        args.data_dir,
+        class_to_idx,
+        scoring_contract(args.model),
+    )
+
+
 def main():
     args = parse_args()
+    if args.out is None:
+        args.out = Path(args.model).with_suffix(".onnx")
     model, class_to_idx = load_checkpoint(args.model)
+    if args.check_only:
+        if not args.out.is_file():
+            raise SystemExit(f"ONNX file not found: {args.out}")
+        print(f"Checking {args.out}")
+        print(f"class_to_idx {class_to_idx}")
+        _run_check(args, model, class_to_idx)
+        return
     export_graph(model, args.out)
     payload = build_sidecar(args.model, class_to_idx)
     sidecar = sidecar_path(args.out)
@@ -277,11 +535,7 @@ def main():
         f"threshold {payload['threshold']}"
     )
     if args.check:
-        compare_logits(
-            model,
-            args.out,
-            check_images(args.data_dir, args.images),
-        )
+        _run_check(args, model, class_to_idx)
 
 
 if __name__ == "__main__":

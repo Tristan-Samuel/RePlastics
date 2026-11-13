@@ -2,9 +2,11 @@
 
 ResNeXt-50 (32×4d) labels one belt photo **metal**, **plastic**, or **uncertain**.
 
-The current checkpoint is a Colab T4 fine-tune from 5 October 2026: `models/resnext50_metal_plastic_belt_stage1_layer4.pt`. That file stays on the training machine. **Metal** is the reject bucket (belt cans and stage 1 `OTHERS`). **Plastic** is PET, HDPE, and PP. **Uncertain** means hold the frame: the winning score has to clear 0.85.
+The default checkpoint is the 28 Oct belt-only layer4 run, `models/resnext50_metal_plastic_belt_only_layer4_20261028_20261029-105214.pt`. `models/resnext50_metal_plastic.pt` points there. Stage 1 was already out of that training set, and the 23 October cans were not in it. The file records 97.06% on the test split from that run. **Metal** is the reject bucket (belt cans, and stage 1 `OTHERS` on older checkpoints). **Plastic** is PET, HDPE, and PP. **Uncertain** means hold the frame: the winning score has to clear 0.85.
 
-## Test result
+`models/replastics_best.pt` is the official 14 Oct resin head. The file is weights only. `models/replastics_best.metadata.json` names the classes HDPE, PET, PP, in that order, and records their v2_2 parity test. Models and Open set both list it. Open set scores each of those resins as plastic. The head has no metal class. Their metadata sends a score under 0.85 to review. On Open set that cutoff is still called uncertain.
+
+## Older 5 Oct test result
 
 The locked test split is 300 images, scored once after validation picked the epoch.
 
@@ -95,7 +97,7 @@ python train.py --resume
 python train.py --resume --unfreeze layer4 --lr 0.001 --lr-backbone 0.0001 --epochs 8
 ```
 
-Train `fc` first. `--unfreeze layer4` also trains the last residual stage, at `--lr-backbone` (default `--lr / 10`). `layer3` and `all` are there for a later, larger set.
+Train `fc` first. `--unfreeze layer4` also trains the last residual stage, at `--lr-backbone` (default `--lr / 10`). `layer3` and `all` are there for a later, larger set. `--weight-power 0` turns class weighting off. `--fresh-best` keeps this run's best epoch even when that score is below the checkpoint you resumed.
 
 A Colab T4 run. The photo zip is `~/Downloads/belt_stage1_224.zip` on this computer:
 
@@ -113,9 +115,10 @@ chmod +x colab_train.sh
 ```bash
 python train.py --eval --data-dir data_belt_stage1
 python predict.py --images path/to/photo.jpg --no-show
+python analyze.py --steps cam --images path/to/photo.jpg --no-show
 ```
 
-`predict.py` resizes to 224×224 and draws the metal and plastic percentages. `--eval` prints validation and test accuracy and leaves the checkpoint alone.
+`predict.py` resizes to 224×224 and draws the metal and plastic percentages. `--eval` prints validation and test accuracy and leaves the checkpoint alone. `analyze.py --steps cam` writes a Grad-CAM figure for that photo under `analysis/`. A photo that is not in a class folder still gets one. More than 32 files is sampled.
 
 ## Jetson
 
@@ -124,7 +127,7 @@ pip install onnx onnxruntime
 python export_onnx.py --model models/resnext50_metal_plastic.pt --check --data-dir data_belt_stage1
 ```
 
-That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_plastic.onnx.json`. Another checkpoint writes `models/<that stem>.onnx`. The graph is two logits. `--check` scores every test photo in PyTorch and in ONNX Runtime and prints accuracy, balanced accuracy, and any label that changed. The camera process still does the 224 resize, ImageNet normalize, and the 0.85 hold. Copy both files to the Jetson and build the engine there: [docs/jetson.md](docs/jetson.md). The lab page is [Jetson](http://127.0.0.1:5050/jetson). Pick the checkpoint there.
+That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_plastic.onnx.json`. Another checkpoint writes `models/<that stem>.onnx`. The graph is two logits. `--check` scores every test photo in PyTorch and in ONNX Runtime and prints accuracy, balanced accuracy, and any label that changed. It stops when a label changes. `--check-only` scores an ONNX file already on disk. The camera process still does the 224 resize, ImageNet normalize, and the 0.85 hold. Copy both files to the Jetson and build the engine there: [docs/jetson.md](docs/jetson.md). The lab page is [Jetson](http://127.0.0.1:5050/jetson). Pick the checkpoint there. Check ONNX re-scores the file already written, and those scores stay on the page.
 
 ## Lab
 
@@ -132,22 +135,32 @@ That writes `models/resnext50_metal_plastic.onnx` and `models/resnext50_metal_pl
 python -m web
 ```
 
-Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Jobs lists every checkpoint with the validation, balanced, and test scores stored in the file, and a T4 run uploads the one you pick plus `~/Downloads/belt_stage1_224.zip`. Drive's copy of that zip is not read. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide is on every checkpoint, and the 0.85 hold applies to each of them. With saved logits it switches which analysis job's confidence scores are shown. Without them it offers a confidence report. Start on Jobs copies the checkpoint you picked into `models/` and trains that copy. Delete or rename a checkpoint from Models. Filter and sort are on that page. The name is the label. The file field moves the checkpoint, the ONNX pair beside it, and its analysis folder. `models/names.json` keeps the label. Small, Medium, and Large set the photo sheet, and a click opens that photo so the arrow keys can move through the group. Jetson picks the checkpoint, copies the export command, writes an ONNX named after that file, scores the test split against PyTorch, and opens that folder in Finder or Explorer.
+Open http://127.0.0.1:5050. It listens on this machine only. `WEB_PORT` changes the port. Open set is http://127.0.0.1:5050/open-set. Build fits train centroids for the checkpoint you pick, then scores validation and test. The distance mark is the 99th percentile on validation photos the model got right. Rerun asks before test is scored again. The tiles are percentages of the split you are looking at, with the counts underneath, including the Decide figures and a split of uncertain into a right call and a wrong call. A keep line accepts a photo once confidence is high enough, whatever the distance. Fit on validation can place that line, or that line and the distance mark, and it skips a candidate that would hold more than 5% of validation. Test does not pick it. Drop a photo, or name a folder such as `data/probes`, to score it on the saved bank. Empty or unreadable files in that folder are skipped. Nested `metal`, `plastic`, and `other` folders keep those labels, and `other` is the unknown class. The plot scrolls to zoom, drags to pan, and shift-drags a box around a tight cluster. The photo list colors follow the sliders: teal is kept, amber is others, gray is uncertain, and red is a wrong class the filters still accepted. Sort can put those first. Validation and test can join that list. Others means the vector is outside both clouds. Uncertain still means the winning score is under the cutoff. Neither one changes the 0.85 hold. Belt is http://127.0.0.1:5050/belt. Build measures foreground area and fits a centroid on `data/probes/blanks`, then picks an area cut on validation that catches blank frames while holding at most 1% of that split. A second cut holds a small object only when its pooled vector is also near that centroid. Test is scored once. Rerun asks before test is scored again. Empty means the belt has nothing large enough to sort. It does not change the 0.85 hold. Pipeline is http://127.0.0.1:5050/pipeline. Belt checks and checkpoints are cards you wire together. Score writes each photo’s belt numbers and each checkpoint’s open-set scores once. Moving a card, a cut, or a confidence mark after that does not score again. Fit on a model card searches validation only, and it skips a rule that would leave more than 5% of validation in a hold pile or on an unwired port. Test does not pick that fit.
+
+Jobs lists every checkpoint with the validation, balanced, and test scores stored in the file, and a T4 run uploads the one you pick plus `~/Downloads/belt_stage1_224.zip`. Drive's copy of that zip is not read. Overview loads a saved analysis, searches the dataset photos, and shows how that dataset is split. Decide is on every checkpoint, and the 0.85 hold applies to each of them. With saved logits it switches which analysis job's confidence scores are shown. Without them it offers a confidence report. Start on Jobs makes one copy of the checkpoint you picked and trains that copy. The file you picked stays. Delete or rename a checkpoint from Models. Filter and sort are on that page. The name is the label. The file field moves the checkpoint, the ONNX pair beside it, and its analysis folder. `models/names.json` keeps the label. Small, Medium, and Large set the photo sheet, and a click opens that photo so the arrow keys can move through the group. That photo has Run Grad-CAM. The Run tab also takes a JPEG, PNG, or WebP from this computer, and the figure lands in the newest analysis run. Jetson picks the checkpoint, copies the export command, writes an ONNX named after that file, scores the test split against PyTorch, and can re-score an ONNX file already on disk. It opens that folder in Finder or Explorer.
 
 ## Belt stage 1 counts
 
-11,274 images at 224×224. Train, validation, and test share neither filename nor bytes.
+Train and validation are belt photos only. Stage 1 is out of test as well. Those 5,619 photos are in `data_belt_stage1/removed_stage1/`. Test is the earlier belt photos plus the 499 cans from 23 October 2026. `~/Downloads/belt_stage1_224.zip` is a copy of these folders. The Data page button zips what is on disk. It does not put `removed_stage1` back.
 
 | Split | Stage 1 metal | Belt metal | Stage 1 plastic | Belt plastic | Total |
 |---|---:|---:|---:|---:|---:|
-| Train | 682 | 680 | 3,949 | 3,946 | 9,257 |
-| Validation | 280 | 93 | 406 | 712 | 1,491 |
-| Test | 242 | 134 | 60 | 90 | 526 |
+| Train | 0 | 677 | 0 | 3,949 | 4,626 |
+| Validation | 0 | 93 | 0 | 712 | 805 |
+| Test | 0 | 633 | 0 | 90 | 723 |
 
-Stage 1 metal is split about evenly: 280 validation, 242 test. With the belt cans, metal is 373 validation and 376 test. Locked stage 1 test stems stay in test. The 28–30 September can windows are unchanged, including the 24 boundary frames. The 180 cans from 25 September stay in train and validation. The six foil trays the current checkpoint calls plastic are two in train, one in validation, and three in test. Plastic counts are unchanged. The scored result above is still the original balanced test, 150 metal and 150 plastic. Synthetic stage 1 copies are not in the dataset.
+Belt metal in test is the original 134 plus those 499. Three 30 September bottles that were filed as metal are now plastic in train. The other 28–30 September can windows are unchanged, including the 24 boundary frames. The 180 cans from 25 September stay in train and validation. The six foil trays the 5 Oct checkpoint calls plastic stay in their splits. The scored result above is still that checkpoint's balanced test, 150 metal and 150 plastic. Synthetic stage 1 copies are not in the dataset.
+
+`data_belt_oct23` is a copy of these folders. 318 earlier October cans are in train. Validation has 40 other October cans from that same stretch, plus 8 October cans the 29 Oct checkpoint calls plastic: the Sprite can, `capture_00192`, `capture_00346`, `capture_00444`, `capture_00329`, `capture_00160`, `capture_00024`, and `capture_00370`. Test keeps the other 13 of those misses, including the Red Bull nutrition-facts can, and the latest 120 October cans that checkpoint already calls metal. `data_belt_stage1` is unchanged, and the T4 zip is still that folder. Pick `data_belt_oct23` in the dataset menu and leave Use Drive zip unchecked.
+
+| Split | Metal | Plastic | Total |
+|---|---:|---:|---:|
+| Train | 995 | 3,949 | 4,944 |
+| Validation | 141 | 712 | 853 |
+| Test | 267 | 90 | 357 |
 
 ## Weights and logs
 
-A checkpoint is about 88 MB. The files live in `models/` on this machine, and `.gitignore` leaves them out. Loading one in PyTorch shows the weights plus the scores from the run that saved it: validation accuracy, balanced validation accuracy, and test accuracy. The file has no per-epoch history. `models/resnext50_metal_plastic.pt` is the default link, and it points at the 5 Oct layer4 checkpoint.
+A checkpoint is about 88 MB. The files live in `models/` on this machine, and `.gitignore` leaves them out. Loading one in PyTorch shows the weights plus the scores from the run that saved it: validation accuracy, balanced validation accuracy, and test accuracy. The file has no per-epoch history. `models/resnext50_metal_plastic.pt` is the default link, and it points at the 28 Oct belt-only layer4 checkpoint.
 
 `train.py` prints each epoch to the terminal. It does not write a log file, and the Colab transcript was not kept. The lab writes a job transcript under `web/job-logs/` when a job runs. Those files are gitignored. The training record is the report linked above.

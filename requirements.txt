@@ -4,3 +4,4 @@ matplotlib
 scikit-learn
 pillow
 flask
+opencv-python-headless

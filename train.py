@@ -121,6 +121,15 @@ def parse_args():
             "Does not train or overwrite the checkpoint."
         ),
     )
+    parser.add_argument(
+        "--fresh-best",
+        action="store_true",
+        help=(
+            "When resuming, save the best epoch of this run "
+            "even if balanced validation falls below the "
+            "loaded checkpoint."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -707,6 +716,15 @@ if args.resume:
         f"balanced {best_balanced_accuracy:.2%}",
         flush=True,
     )
+    if args.fresh_best:
+        print(
+            "Fresh best: this run replaces the loaded weights "
+            "with its own best epoch, even if balanced "
+            "validation falls.",
+            flush=True,
+        )
+        best_balanced_accuracy = -1.0
+        best_validation_accuracy = 0.0
 
 
 for epoch in range(args.epochs):

@@ -45,11 +45,19 @@
           <p class="meta"><code>{{ model.filename }}</code> · {{ model.mtime_label }} · {{ model.size_label }}{% if model.default %} · default{% endif %}{% if model.frozen %} · hold &lt; {{ model.threshold }}{% endif %}</p>
           <p class="hint">{{ model.role }}</p>
           {% if model.warning %}<p class="warn-line">{{ model.warning }}</p>{% endif %}
-          <p class="scores">
-            {{ metric("Validation", model.metrics.validation) }}
-            {{ metric("Balanced", model.metrics.balanced) }}
-            {{ metric("Test", model.metrics.test) }}
-          </p>
+          {% if model.metrics.validation is not none or model.metrics.balanced is not none or model.metrics.test is not none %}
+            <p class="scores">
+              {{ metric("Validation", model.metrics.validation) }}
+              {{ metric("Balanced", model.metrics.balanced) }}
+              {{ metric("Test", model.metrics.test) }}
+            </p>
+          {% elif model.classes %}
+            <p class="scores">
+              <span class="score"><span class="k">Classes</span> {{ model.classes|join(', ') }}</span>
+              {% if model.parity_accuracy is not none %}{{ metric("Parity", model.parity_accuracy) }}{% endif %}
+            </p>
+            {% if model.parity_label %}<p class="hint">Parity is {{ model.parity_label }}. It is not this lab's belt split.</p>{% endif %}
+          {% endif %}
           {% if model.aliases %}
             <p class="aliases">
               {% for name in model.aliases %}<code>{{ name|replace('_', '_​') }}</code>{% if not loop.last %}, {% endif %}{% endfor %}

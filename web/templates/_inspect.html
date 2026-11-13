@@ -2,7 +2,7 @@
 {% if not run %}
   <p class="hint">No saved analysis for this checkpoint yet.</p>
 {% else %}
-  {% set has_cam = run.errors or run.correct %}
+  {% set has_cam = run.errors or run.correct or run.unlabeled %}
   {% set has_plots = has_cam or run.maps or run.filters or run.space or run.stats or run.montages %}
   {% if not has_plots %}
     <p class="hint">No plots in this run.</p>
@@ -45,6 +45,15 @@
         <h2>Grad-CAM, correct</h2>
         <div class="grid">
           {% for card in run.correct %}{{ figure(card) }}{% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if run.unlabeled %}
+      <section>
+        <h2>Grad-CAM</h2>
+        <div class="grid">
+          {% for card in run.unlabeled %}{{ figure(card) }}{% endfor %}
         </div>
       </section>
     {% endif %}

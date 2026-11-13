@@ -45,6 +45,7 @@ _ORIGIN_LABELS = (
     ("sep28", "28 Sep cans"),
     ("sep29", "29 Sep cans"),
     ("sep30", "30 Sep cans"),
+    ("oct23", "23 Oct cans"),
 )
 _RESIN_ORDER = ("PET", "HDPE", "PP", "OTHERS")
 _CAPTURE = re.compile(r"capture_\d{5}_\d{8}_\d{6}")
@@ -325,7 +326,16 @@ def link_run_sources(run, dataset_name):
         return
     rows = image_index(dataset_name)
     cards = []
-    for key in ("errors", "correct", "filters", "space", "stats", "montages", "other"):
+    for key in (
+        "errors",
+        "correct",
+        "unlabeled",
+        "filters",
+        "space",
+        "stats",
+        "montages",
+        "other",
+    ):
         cards.extend(item for item in run.get(key, []) if isinstance(item, dict) and item.get("rel"))
     for group in run.get("maps", []):
         cards.extend(group.get("layers", []))
@@ -609,6 +619,7 @@ def scan_run(directory):
     rel = directory.resolve().relative_to(ROOT).as_posix()
     errors = []
     correct = []
+    unlabeled = []
     map_groups = {}
     filters = []
     space = []
@@ -630,6 +641,8 @@ def scan_run(directory):
             errors.append(_cam_card(path))
         elif name.startswith("cam_CORRECT"):
             correct.append(_cam_card(path))
+        elif name.startswith("cam_"):
+            unlabeled.append(_cam_card(path))
         elif name.startswith("maps_"):
             group, layer, card = _map_card(path)
             map_groups.setdefault(group, {"label": _pretty(group), "layers": {}})
@@ -681,6 +694,7 @@ def scan_run(directory):
         "rel": rel,
         "errors": errors,
         "correct": correct,
+        "unlabeled": unlabeled,
         "maps": groups,
         "filters": filters,
         "space": space,
@@ -736,10 +750,10 @@ def load_confidence(brief):
 # number means this file is no longer that model.
 _KNOWN = {
     "resnext50_metal_plastic_belt_stage1_layer4.pt": {
-        "title": "5 Oct layer4, current default",
+        "title": "5 Oct layer4",
         "role": (
-            "The belt model. The last residual stage was trained on the "
-            "belt plus stage 1 set. models/resnext50_metal_plastic.pt points here."
+            "The last residual stage was trained on the belt plus stage 1 set. "
+            "The default link no longer points here."
         ),
         "expect_balanced": 0.9911395214332791,
     },
@@ -777,6 +791,40 @@ _KNOWN = {
             "Continued from the 5 Oct weights. Balanced validation 99.49% "
             "and 150/150 on the old 300-image test. The T4 unpacked the "
             "5 Oct zip, not the 11,274-image set on this computer."
+        ),
+    },
+    "resnext50_metal_plastic_belt_only_fc_20261028.pt": {
+        "title": "28 Oct belt-only head",
+        "role": (
+            "Head only, started from ImageNet on belt photos. "
+            "Stage 1 was not in that training set."
+        ),
+    },
+    "resnext50_metal_plastic_belt_only_layer4_20261028_20261029-105214.pt": {
+        "title": "28 Oct belt-only, current default",
+        "role": (
+            "Belt photos only, after stage 1 was removed and before the "
+            "23 October cans were added. The stored test score is 97.06%. "
+            "models/resnext50_metal_plastic.pt points here."
+        ),
+        "expect_balanced": 0.9985955056179776,
+    },
+    "resnext50_metal_plastic_belt_only_layer4_20261028.pt": {
+        "title": "28 Oct belt-only layer4",
+        "role": (
+            "Last residual stage, continued from the 28 Oct belt-only head. "
+            "Trained on belt photos. The test score stored in the file "
+            "still includes stage 1 metal that has since been taken out of test."
+        ),
+    },
+    "replastics_best.pt": {
+        "title": "Official RePlastics",
+        "role": (
+            "14 Oct resin head for RPR-SORT-0003. The classes are HDPE, "
+            "PET, and PP, in that order. Confidence under 0.85 is their "
+            "review bucket. The parity figure is their v2_2 test, not "
+            "this lab's belt split. Open set reads each resin as plastic. "
+            "This head has no metal class."
         ),
     },
 }
@@ -1171,7 +1219,7 @@ def _describe(filename, meta, rel):
     balanced = meta.get("balanced")
     if expected is not None and balanced is not None and abs(balanced - expected) > 0.005:
         warning = (
-            "The scores in this file do not match the 5 Oct layer4 run "
+            "The scores in this file do not match the recorded run "
             f"(balanced {_pct(expected)}). This is not that model."
         )
     return title, role, warning
@@ -1184,10 +1232,19 @@ def _model_record(path, alias_names):
     rel = path.relative_to(ROOT).as_posix()
     title, role, warning = _describe(path.name, meta, rel)
     default = "resnext50_metal_plastic.pt" in alias_names
-    option = (
-        f"{title} · balanced {_pct(meta.get('balanced'))}"
-        f" · test {_pct(meta.get('test'))}"
-    )
+    classes = list(meta.get("classes") or [])
+    if (
+        classes
+        and meta.get("validation") is None
+        and meta.get("balanced") is None
+        and meta.get("test") is None
+    ):
+        option = f"{title} · {', '.join(classes)}"
+    else:
+        option = (
+            f"{title} · balanced {_pct(meta.get('balanced'))}"
+            f" · test {_pct(meta.get('test'))}"
+        )
     return {
         "stem": path.stem,
         "filename": path.name,
@@ -1195,6 +1252,10 @@ def _model_record(path, alias_names):
         "role": role,
         "warning": warning,
         "option_label": option,
+        "classes": classes,
+        "head": meta.get("head") or "",
+        "parity_accuracy": meta.get("parity_accuracy"),
+        "parity_label": meta.get("parity_label") or "",
         "default": default,
         "rel": path.relative_to(ROOT).as_posix(),
         "aliases": alias_names,
@@ -1219,16 +1280,37 @@ def _checkpoint_meta(path):
         "validation": None,
         "balanced": None,
         "test": None,
+        "classes": [],
+        "head": "",
+        "parity_accuracy": None,
+        "parity_label": "",
     }
     try:
         import torch
 
+        from checkpoints import class_names_for, is_raw_state_dict, read_metadata
+
         blob = torch.load(path, map_location="cpu", weights_only=False)
-        meta = {
-            "validation": _as_float(blob.get("best_validation_accuracy")),
-            "balanced": _as_float(blob.get("best_balanced_accuracy")),
-            "test": _as_float(blob.get("test_accuracy")),
-        }
+        if isinstance(blob, dict) and not is_raw_state_dict(blob):
+            meta["validation"] = _as_float(blob.get("best_validation_accuracy"))
+            meta["balanced"] = _as_float(blob.get("best_balanced_accuracy"))
+            meta["test"] = _as_float(blob.get("test_accuracy"))
+        sidecar = read_metadata(path)
+        names = class_names_for(blob, sidecar) or []
+        if is_raw_state_dict(blob):
+            meta["classes"] = names
+            if tuple(names) == ("HDPE", "PET", "PP"):
+                meta["head"] = "resin"
+            accuracy = _as_float(sidecar.get("pytorch_accuracy"))
+            meta["parity_accuracy"] = accuracy
+            bits = []
+            split = sidecar.get("parity_split")
+            if isinstance(split, str) and split.strip():
+                bits.append(split.strip())
+            count = sidecar.get("parity_n")
+            if isinstance(count, int) and not isinstance(count, bool):
+                bits.append(f"{count} photos")
+            meta["parity_label"] = " · ".join(bits)
         del blob
     except Exception:
         meta["error"] = "Could not read checkpoint metrics."
@@ -1435,6 +1517,7 @@ def _empty_run(rel):
         "rel": rel,
         "errors": [],
         "correct": [],
+        "unlabeled": [],
         "maps": [],
         "filters": [],
         "space": [],
@@ -1463,7 +1546,9 @@ def _cam_card(path):
     card["resin"] = resin
     card["predicted"] = predicted
     bits = []
-    if true:
+    if true == "unlabeled":
+        bits.append("no label")
+    elif true:
         bits.append(f"true {true}")
     if predicted:
         bits.append(f"pred {predicted}")
@@ -1475,9 +1560,13 @@ def _cam_card(path):
 
 def _parse_cam(stem):
     parts = stem.split("_")
-    if len(parts) < 4 or parts[0] != "cam" or parts[1] not in {"WRONG", "CORRECT"}:
+    if len(parts) < 4 or parts[0] != "cam" or parts[1] not in {
+        "WRONG",
+        "CORRECT",
+        "UNLABELED",
+    }:
         return "", "unknown", ""
-    true = parts[2] if parts[2] in {"metal", "plastic"} else ""
+    true = parts[2] if parts[2] in {"metal", "plastic", "unlabeled"} else ""
     index = 3
     resin = "unknown"
     if index < len(parts) and parts[index] in RESINS:
@@ -1563,6 +1652,115 @@ def _image_rel(text):
     ):
         return resolved.relative_to(ROOT).as_posix()
     return None
+
+
+def open_set_dir(model):
+    return ROOT / "analysis" / model["stem"] / "open-set"
+
+
+def open_set_brief(model):
+    """Bank summary for the Open set page. None until a build has finished."""
+    if model is None:
+        return None
+    folder = open_set_dir(model)
+    meta_path = folder / "meta.json"
+    if not meta_path.is_file():
+        return None
+    if not (folder / "bank.npz").is_file() or not (folder / "scores.json").is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        stat = (ROOT / model["rel"]).stat()
+    except (OSError, json.JSONDecodeError):
+        return None
+    suggestions = meta.get("suggestions") or {}
+    return {
+        "rel": folder.relative_to(ROOT).as_posix(),
+        "data_dir": meta.get("data_dir") or "",
+        "counts": meta.get("counts") or {},
+        "suggestions": suggestions,
+        "suggestion_count": int(meta.get("suggestion_count") or 0),
+        "temperature": meta.get("temperature"),
+        "knn_k": meta.get("knn_k") or 10,
+        "pca_dim": meta.get("pca_dim") or 32,
+        "stale": (
+            stat.st_mtime_ns != meta.get("model_mtime_ns")
+            or stat.st_size != meta.get("model_size")
+        ),
+        "mtime_ns": meta_path.stat().st_mtime_ns,
+    }
+
+
+def presence_dir(model):
+    return ROOT / "analysis" / model["stem"] / "presence"
+
+
+def presence_brief(model):
+    """Presence summary for the Belt page. None until a build has finished."""
+    if model is None:
+        return None
+    folder = presence_dir(model)
+    meta_path = folder / "meta.json"
+    if not meta_path.is_file() or not (folder / "scores.json").is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        stat = (ROOT / model["rel"]).stat()
+    except (OSError, json.JSONDecodeError):
+        return None
+    rates = meta.get("rates") or {}
+    ranges = meta.get("area_ranges") or {}
+
+    def cards(rows):
+        found = []
+        for row in rows or []:
+            path = row.get("path") or ""
+            found.append(
+                {
+                    "path": path,
+                    "rel": _image_rel(path),
+                    "area": row.get("area"),
+                    "blank": row.get("blank"),
+                    "true": row.get("true") or "",
+                    "reason": row.get("reason") or "",
+                }
+            )
+        return found
+
+    return {
+        "rel": folder.relative_to(ROOT).as_posix(),
+        "data_dir": meta.get("data_dir") or "",
+        "blanks_dir": meta.get("blanks_dir") or "",
+        "downscale_width": meta.get("downscale_width"),
+        "deviation_threshold": meta.get("deviation_threshold"),
+        "sigma_divisor": meta.get("sigma_divisor"),
+        "illumination_width": meta.get("illumination_width"),
+        "area_cut": meta.get("area_cut"),
+        "area_loose": meta.get("area_loose"),
+        "blank_cut": meta.get("blank_cut"),
+        "overlap": bool(meta.get("overlap")),
+        "note": meta.get("note") or "",
+        "area_ranges": {
+            "blank": ranges.get("blank") or {},
+            "validation": ranges.get("validation") or {},
+        },
+        "rates": rates,
+        "missed": cards(meta.get("missed")),
+        "held": cards(meta.get("held")),
+        "outliers": cards(meta.get("outliers")),
+        "stale": (
+            stat.st_mtime_ns != meta.get("model_mtime_ns")
+            or stat.st_size != meta.get("model_size")
+        ),
+        "mtime_ns": meta_path.stat().st_mtime_ns,
+    }
+
+
+def open_set_scores_path(model):
+    path = open_set_dir(model) / "scores.json"
+    if not path.is_file():
+        return None
+    return path
 
 
 def _read_sweep(path):

@@ -22,6 +22,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+import argparse
 import hashlib
 import os
 import random
@@ -605,17 +606,22 @@ def rebalance_stage1_metal(stage_rows, other_val_metal, other_test_metal):
 
 
 def write_zip():
-    if ZIP_PATH.exists():
-        ZIP_PATH.unlink()
+    """Zip the class folders on disk. Leave removed_stage1 out."""
     files = sorted(
         path
         for path in DEST.rglob("*")
-        if path.is_file() and path.name != ".DS_Store"
+        if path.is_file()
+        and path.name != ".DS_Store"
+        and "removed_stage1" not in path.relative_to(DEST).parts
     )
+    partial = ZIP_PATH.with_suffix(".zip.partial")
+    if partial.exists():
+        partial.unlink()
     print(f"Zipping {len(files)} files -> {ZIP_PATH}", flush=True)
-    with zipfile.ZipFile(ZIP_PATH, "w", compression=zipfile.ZIP_STORED) as archive:
+    with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_STORED) as archive:
         for path in files:
             archive.write(path, path.relative_to(DEST).as_posix())
+    partial.replace(ZIP_PATH)
     print(f"Zip size {ZIP_PATH.stat().st_size / (1024 * 1024):.1f} MB", flush=True)
 
 
@@ -695,4 +701,19 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Build the belt dataset, or zip the folders already on disk."
+    )
+    parser.add_argument(
+        "--zip-only",
+        action="store_true",
+        help=(
+            "Zip data_belt_stage1 into ~/Downloads/belt_stage1_224.zip. "
+            "Does not move photos. Skips removed_stage1."
+        ),
+    )
+    args = parser.parse_args()
+    if args.zip_only:
+        write_zip()
+    else:
+        main()

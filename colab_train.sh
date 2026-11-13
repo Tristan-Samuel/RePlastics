@@ -24,6 +24,7 @@ USE_DRIVE=0
 DRIVE_DIR="${COLAB_DRIVE_DIR:-stage1_binary_v2}"
 DATA_ZIP="${COLAB_DATA_ZIP:-belt_stage1_224.zip}"
 LOCAL_ZIP="${COLAB_LOCAL_ZIP:-$HOME/Downloads/$DATA_ZIP}"
+OUT_PATH=""
 TRAIN_ARGS=()
 PHASE=start
 ONE_SHOT_UPLOAD_MAX=$((8 * 1024 * 1024))
@@ -43,6 +44,9 @@ Helper flags:
   --drive-dir PATH   Folder under MyDrive (default: stage1_binary_v2).
                      Used only if the local zip is not how photos arrive.
   --data-dir DIR     Local dataset root to upload (ignored with --drive)
+  --out PATH         Save the trained file at this models/*.pt path.
+                     It has to be the same path as --model. Start
+                     copies the checkpoint there once and trains it.
   -h, --help         Show this help
 
 All other flags are forwarded to train.py.
@@ -83,6 +87,10 @@ while [[ $# -gt 0 ]]; do
         --data-dir)
             DATA_DIR="$2"
             TRAIN_ARGS+=(--data-dir "$2")
+            shift 2
+            ;;
+        --out)
+            OUT_PATH="$2"
             shift 2
             ;;
         --)
@@ -158,12 +166,33 @@ if [[ ${#TRAIN_ARGS[@]} -gt 0 ]]; then
     done
 fi
 
+# Chunked uploads name their parts with this stamp. --out only chooses
+# the finished checkpoint path, so the stamp is still required.
 STAMP="$(date +%Y%m%d-%H%M%S)"
-RESULT_NAME="$(basename "${MODEL_PATH%.pt}")_${STAMP}.pt"
-RESULT_PATH="models/${RESULT_NAME}"
+if [[ -n "$OUT_PATH" ]]; then
+    if [[ "$OUT_PATH" == *..* || "$OUT_PATH" == */*/* || "$OUT_PATH" != models/*.pt ]]; then
+        echo "--out has to look like models/name.pt" >&2
+        exit 1
+    fi
+    RESULT_PATH="$OUT_PATH"
+    RESULT_NAME="$(basename "$OUT_PATH")"
+else
+    RESULT_NAME="$(basename "${MODEL_PATH%.pt}")_${STAMP}.pt"
+    RESULT_PATH="models/${RESULT_NAME}"
+fi
+if [[ -n "$OUT_PATH" && "$OUT_PATH" != "$MODEL_PATH" ]]; then
+    echo "Refusing to train $MODEL_PATH and also save $OUT_PATH." >&2
+    echo "That writes two checkpoints. Pass the copy as both --model and --out." >&2
+    exit 1
+fi
 if [[ "$RESUME" -eq 1 ]]; then
     echo "Starting weights on this computer: $MODEL_PATH"
-    echo "Trained weights will be saved as a new file: $RESULT_PATH"
+    if [[ -n "$OUT_PATH" ]]; then
+        echo "Trained weights will replace that copy: $RESULT_PATH"
+    else
+        echo "Trained weights will be saved as one new file: $RESULT_PATH"
+        echo "Left the starting file in place: $MODEL_PATH"
+    fi
     echo "A Drive checkpoint with the same name is not loaded."
 fi
 if [[ "$USE_DRIVE" -eq 1 ]]; then
@@ -296,14 +325,13 @@ else
     ARGS_JSON='[]'
 fi
 
-python3 - "$RUN_FILE" "$ARGS_JSON" "$RESULT_NAME" <<'PY'
+python3 - "$RUN_FILE" "$ARGS_JSON" <<'PY'
 from pathlib import Path
 import json
 import sys
 
 run_file = Path(sys.argv[1])
 train_args = json.loads(sys.argv[2])
-result_name = sys.argv[3]
 model_rel = "models/resnext50_metal_plastic.pt"
 if "--model" in train_args:
     model_rel = train_args[train_args.index("--model") + 1]
@@ -319,20 +347,7 @@ run_file.write_text(
     "if not src.is_file():\n"
     "    raise SystemExit('train.py finished without writing the checkpoint')\n"
     "shutil.copy2(src, Path('/content/best.pt'))\n"
-    "drive_root = Path('/content/drive/MyDrive')\n"
-    "if drive_root.is_dir():\n"
-    "    dest_dir = drive_root / 'metal-plastic-sorting'\n"
-    "    dest_dir.mkdir(parents=True, exist_ok=True)\n"
-    f"    shutil.copy2(src, dest_dir / {json.dumps(result_name)})\n"
-    "    print('Saved a Drive copy of the trained file. The next run does not read it.', flush=True)\n"
-    "    for name in (\n"
-    "        'confusion_matrix.png',\n"
-    "        'misclassified_validation.png',\n"
-    "        'misclassified_validation.txt',\n"
-    "    ):\n"
-    "        art = Path('/content') / name\n"
-    "        if art.is_file():\n"
-    "            shutil.copy2(art, dest_dir / name)\n"
+    "print('Trained file stays at', src, flush=True)\n"
     "print('COLAB_STEP_OK', flush=True)\n",
     encoding="utf-8",
 )
@@ -461,13 +476,15 @@ download_if_present() {
 
 download_checkpoint() {
     mkdir -p models
-    if [[ -e "$RESULT_PATH" ]]; then
+    if [[ -e "$RESULT_PATH" && -z "$OUT_PATH" ]]; then
         echo "Refusing to overwrite $RESULT_PATH" >&2
         return 1
     fi
     if colab download -s "$SESSION" content/best.pt "$RESULT_PATH"; then
         echo "Trained checkpoint saved to $RESULT_PATH"
-        echo "Left the starting file in place: $MODEL_PATH"
+        if [[ -z "$OUT_PATH" ]]; then
+            echo "Left the starting file in place: $MODEL_PATH"
+        fi
         return 0
     fi
     echo "Failed to download the checkpoint. It is on the VM at /content/best.pt." >&2

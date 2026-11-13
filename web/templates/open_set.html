@@ -1,0 +1,404 @@
+{% extends "base.html" %}
+{% block title %}Open set{% endblock %}
+{% block watch %}yes{% endblock %}
+{% block body %}
+  <div class="page-head">
+    <h1>Open set</h1>
+    <p>A photo is <strong>others</strong> when its pooled vector sits outside the metal and plastic clouds. Low confidence inside a cloud stays <strong>uncertain</strong>. A keep line can still accept a photo once confidence is high enough, whatever the distance. This page only previews that pair. It does not change the 0.85 hold, and it is not the stage 1 OTHERS resin.</p>
+  </div>
+
+  <section class="panel">
+    <h2>Bank</h2>
+    {% if models and data_roots %}
+      <form method="get" class="form-grid" action="{{ url_for('open_set_page') }}">
+        <label class="span-2">
+          Checkpoint
+          <select name="model" onchange="this.form.submit()">
+            {% for item in models %}
+              <option value="{{ item.rel }}" {% if item.rel == selected_model %}selected{% endif %}>{{ item.option_label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="span-2">
+          Dataset
+          <select name="data" onchange="this.form.submit()">
+            {% for name in data_roots %}
+              <option value="{{ name }}" {% if name == selected_data %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
+      {% if model and model.head == 'resin' %}
+        <p class="hint">This checkpoint scores {{ model.classes|join(', ') }}. Each of those is plastic here. It has no metal class. Confidence under 0.85 is the review bucket in its metadata, which this page calls uncertain. Distance still uses the metal and plastic train photos.</p>
+      {% endif %}
+      <form
+        id="open-set-build"
+        method="post"
+        action="{{ url_for('start_job') }}"
+        {% if brief %}data-confirm="This scores the locked test split again. Continue?"{% endif %}
+      >
+        <input type="hidden" name="kind" value="open-set">
+        <input type="hidden" name="model" value="{{ selected_model }}">
+        <input type="hidden" name="data_dir" value="{{ selected_data }}">
+      </form>
+      <div class="buttons">
+        <button form="open-set-build">{% if brief %}Rerun{% else %}Build{% endif %}</button>
+      </div>
+      {% if brief %}
+        <p class="hint">
+          Fit on train in <code>{{ brief.data_dir }}</code>
+          ({{ brief.counts.train or 0 }} photos).
+          Validation {{ brief.counts.validation or 0 }},
+          test {{ brief.counts.test or 0 }}.
+          The mark is the 99th percentile of each distance on
+          {{ brief.suggestion_count }} validation photos the model got right.
+          {% set cloud_mark = brief.suggestions.get('cloud') %}
+          {% if cloud_mark is not none %}
+            Cloud mark {{ '%.4f'|format(cloud_mark) }}.
+          {% endif %}
+          k-NN is {{ brief.knn_k }} neighbors. Mahalanobis is {{ brief.pca_dim }} components.
+        </p>
+        {% if brief.data_dir != selected_data %}
+          <p class="warn-line">This bank was fit on {{ brief.data_dir }}. Rerun to use {{ selected_data }}.</p>
+        {% endif %}
+        {% if brief.stale %}
+          <p class="warn-line">This checkpoint changed after the bank was built. Rerun before scoring new photos.</p>
+        {% endif %}
+      {% else %}
+        <p>No bank for this checkpoint yet. Build fits a metal centroid and a plastic centroid on train, then scores validation and test. The distance mark is the 99th percentile on validation photos the model already gets right. Test does not pick that mark.</p>
+      {% endif %}
+    {% else %}
+      <p class="hint">Put a checkpoint in <code>models/</code> and a dataset folder next to it.</p>
+    {% endif %}
+  </section>
+
+  {% if brief %}
+    <section
+      data-open-set
+      data-scores-url="{{ url_for('open_set_scores', model=selected_model, v=brief.mtime_ns) }}"
+      data-probe-url="{{ url_for('open_set_probe') }}"
+      data-model="{{ selected_model }}"
+      data-frozen="0.85"
+    >
+      <div class="decide-bar">
+        <div class="seg" role="group" aria-label="Split">
+          <button type="button" data-split-value="validation" aria-pressed="true">Validation</button>
+          <button type="button" data-split-value="test" aria-pressed="false">Test</button>
+          <button type="button" data-split-value="both" aria-pressed="false">Both</button>
+        </div>
+        <p class="hint" data-split-note></p>
+      </div>
+
+      <p class="hint">Each percentage is a share of this split. The count under it is the photos in that share.</p>
+      <div class="metrics" data-figures>
+        <div class="metric accent" data-fig="accepted">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Accepted</span>
+        </div>
+        <div class="metric warn" data-fig="uncertain">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Uncertain</span>
+        </div>
+        <div class="metric warn" data-fig="others">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Others</span>
+        </div>
+        <div class="metric accent" data-fig="kept">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Kept past distance</span>
+        </div>
+      </div>
+      <p class="hint">Same questions as Decide. Others counts as a hold. Accuracy and balanced use only photos that received a class.</p>
+      <div class="metrics">
+        <div class="metric warn" data-fig="held">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Held</span>
+        </div>
+        <div class="metric accent" data-fig="caught">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Caught</span>
+        </div>
+        <div class="metric bad" data-fig="still">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Still wrong</span>
+        </div>
+        <div class="metric warn" data-fig="held-right">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Held but right</span>
+        </div>
+        <div class="metric accent" data-fig="accuracy">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Accuracy</span>
+        </div>
+        <div class="metric accent" data-fig="balanced">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Balanced</span>
+        </div>
+      </div>
+      <div class="metrics">
+        <div class="metric accent" data-fig="uncertain-right">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Uncertain, call right</span>
+        </div>
+        <div class="metric bad" data-fig="uncertain-wrong">
+          <span class="num">—</span>
+          <span class="sub"></span>
+          <span class="lbl">Uncertain, call wrong</span>
+        </div>
+      </div>
+      <table class="matrix" data-matrix>
+        <caption>Where labeled photos went</caption>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Metal</th>
+            <th>Plastic</th>
+            <th>Uncertain</th>
+            <th>Others</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr data-row="metal">
+            <th>True metal</th>
+            <td data-cell="metal">—</td>
+            <td data-cell="plastic">—</td>
+            <td data-cell="uncertain">—</td>
+            <td data-cell="others">—</td>
+          </tr>
+          <tr data-row="plastic">
+            <th>True plastic</th>
+            <td data-cell="metal">—</td>
+            <td data-cell="plastic">—</td>
+            <td data-cell="uncertain">—</td>
+            <td data-cell="others">—</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="chart-panel">
+        <div class="chart-tools">
+          <p class="hint" data-zoom-note>Scroll to zoom toward the cursor. Drag to pan. Shift-drag a box around a cluster.</p>
+          <button type="button" class="ghost" data-zoom-reset>Reset zoom</button>
+        </div>
+        <div class="scatter-wrap">
+          <canvas data-scatter width="900" height="440" aria-label="Confidence against feature distance. Scroll to zoom. Click a point to open the photo."></canvas>
+          <p class="scatter-tip" data-scatter-tip hidden></p>
+        </div>
+        <ul class="legend">
+          <li><i class="swatch metal"></i>Metal</li>
+          <li><i class="swatch plastic"></i>Plastic</li>
+          <li><i class="swatch probe"></i>No label</li>
+          <li><i class="swatch ring-others"></i>Others</li>
+          <li><i class="swatch ring-uncertain"></i>Uncertain</li>
+          <li><i class="swatch ring-miss"></i>Misidentified</li>
+          <li><i class="swatch cut"></i>Hold and distance</li>
+          <li><i class="swatch keep"></i>Keep</li>
+        </ul>
+      </div>
+
+      <div class="open-controls">
+        <label>
+          Confidence
+          <input type="range" min="0.5" max="0.99" step="0.01" value="0.85" data-confidence>
+          <input type="number" min="0.5" max="0.99" step="0.01" value="0.85" data-confidence-num>
+        </label>
+        <label>
+          <span data-distance-label>Cloud distance</span>
+          <input type="range" min="0" max="1" step="any" value="0.5" data-distance>
+          <input type="number" min="0" step="any" value="0.5" data-distance-num>
+        </label>
+        <label>
+          Distance
+          <select data-score>
+            <option value="cloud">Cloud · nearest centroid</option>
+            <option value="call">Call · centroid of the winning class</option>
+            <option value="knn">k-NN · 10 nearest train photos</option>
+            <option value="maha">Mahalanobis · 32-d, one covariance</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button type="button" class="ghost" data-use-frozen>Frozen 0.85</button>
+          <button type="button" class="ghost" data-use-mark>Validation 99%</button>
+        </div>
+      </div>
+      <div class="open-keep">
+        <label class="check">
+          <input type="checkbox" data-keep>
+          Keep once confidence reaches this, whatever the distance
+        </label>
+        <label>
+          Keep
+          <input type="range" min="0.5" max="0.999" step="0.001" value="0.95" data-keep-value>
+          <input type="number" min="0.5" max="99.9" step="0.001" value="0.950" data-keep-num>
+        </label>
+      </div>
+      <div class="open-fit">
+        <label>
+          Fit for
+          <select data-fit-goal>
+            <option value="balanced">Balanced accuracy</option>
+            <option value="accuracy">Accuracy on accepted</option>
+            <option value="still">Fewest still wrong</option>
+            <option value="tradeoff">Catch misses, hold fewer correct</option>
+          </select>
+        </label>
+        <label>
+          Move
+          <select data-fit-what>
+            <option value="keep">Keep line only</option>
+            <option value="both">Keep line and distance</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button type="button" data-fit>Fit on validation</button>
+        </div>
+      </div>
+      <p class="hint" data-fit-note>Manual. The sliders are what you set.</p>
+      <label class="check">
+        <input type="checkbox" data-disagree>
+        Also mark others when the nearest cloud is the other class
+      </label>
+      <p class="hint" data-disagree-note></p>
+      <p class="hint" data-rule></p>
+      <section class="band">
+        <h3>How to read the four distances</h3>
+        <p>Each mode asks a different question. Compare a photo only with the mark for that same mode. A Mahalanobis of 7 is not a worse cloud distance than 0.4.</p>
+        <dl class="distance-guide">
+          <dt>Cloud · nearest centroid</dt>
+          <dd>Cosine distance to the closer of the metal and plastic centroids. Use it when the question is “does this look like either class at all?” Cardboard far from both centroids scores high and becomes others. An odd bottle that still sits near the plastic centroid scores low and stays. A high value means outside both clouds.</dd>
+          <dt>Call · centroid of the winning class</dt>
+          <dd>Cosine distance to the centroid of the class the score picked, not the nearer one. Use it when a confident call might still be a strange example of that class. Plastic can win while the vector sits far from the plastic centroid, if metal is even farther. A high value means that call is atypical.</dd>
+          <dt>k-NN · 10 nearest train photos</dt>
+          <dd>Mean cosine distance to the 10 closest training photos. Use it when a shape the centroid averages away should still be rejected. An empty belt or a sponge can land near the middle of a wide class and look fine to the centroid, while no training photo actually looks like it. A high value means nothing in train is close.</dd>
+          <dt>Mahalanobis · 32-d, one covariance</dt>
+          <dd>Distance after the train vectors are reduced to 32 components, with one covariance shared by both classes. Use it when a class cloud is a long ellipse and cosine treats the long direction like the short one. A photo can be close in cosine and still sit outside the dense part of the cloud. The number is not a cosine. Read it only against this mode’s own mark. A mark near the top of the plot means this mode is rejecting almost nothing, so the keep line will not move the tiles until the mark comes down.</dd>
+        </dl>
+        <p class="hint">The dashed vertical line is the confidence hold. Left of it, a photo still inside the cloud is uncertain. The dashed horizontal line is the distance mark. Above it, the photo is others. The solid vertical line is the keep rule, and it is drawn only while that box is on. Right of it, the winning class is kept even above the distance mark. Validation 99% is the distance of a correct validation photo. It is not a percent of photos rejected. Test did not choose it. Fit searches validation only, and it skips a candidate that would hold more than 5% of that split.</p>
+      </section>
+
+      <section class="band">
+        <header>
+          <h3>Newly others</h3>
+          <p data-strip-count></p>
+        </header>
+        <p class="hint">The confidence hold would accept these. The keep line does not save them, so distance, or disagreement, marks them others.</p>
+        <div class="grid" data-strip></div>
+      </section>
+
+      <section class="band">
+        <header>
+          <h3>Kept anyway</h3>
+          <p data-kept-count></p>
+        </header>
+        <p class="hint">Past the distance mark, or closer to the other class, but confidence is on the keep line so the winning class stays.</p>
+        <div class="grid" data-kept></div>
+      </section>
+
+      <section class="panel">
+        <h2>Photo list</h2>
+        <p>The dataset has no unknown class, so a catch rate only exists for photos you bring. Put <code>data/probes</code> here, or any other folder. A folder named <code>other</code> is the unknown class. A second drop reuses the loaded checkpoint. Validation and test can join this list. The borders follow the sliders above.</p>
+        <form class="form-grid" data-probe-form>
+          <label class="span-2">
+            Photos
+            <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" multiple>
+          </label>
+          <label class="span-2">
+            Folder or file
+            <input type="text" name="folder" placeholder="data/probes">
+          </label>
+          <div class="span-2 buttons">
+            <button type="submit">Score these</button>
+          </div>
+        </form>
+        <p class="hint" data-probe-status>Name <code>data/probes</code> or any other folder, up to 1,500 photos. Nested <code>metal</code>, <code>plastic</code>, and <code>other</code> folders keep those labels. <code>other</code> is the unknown class. Empty or unreadable files in a folder are skipped. A folder outside this repo is copied in so the page can show it.</p>
+        <div class="metrics" data-probe-figures>
+          <div class="metric accent" data-probe-fig="accepted">
+            <span class="num">—</span>
+            <span class="sub"></span>
+            <span class="lbl">Accepted</span>
+          </div>
+          <div class="metric warn" data-probe-fig="uncertain">
+            <span class="num">—</span>
+            <span class="sub"></span>
+            <span class="lbl">Uncertain</span>
+          </div>
+          <div class="metric warn" data-probe-fig="others">
+            <span class="num">—</span>
+            <span class="sub"></span>
+            <span class="lbl">Others</span>
+          </div>
+          <div class="metric accent" data-probe-fig="caught">
+            <span class="num">—</span>
+            <span class="sub"></span>
+            <span class="lbl">Unknown caught</span>
+          </div>
+          <div class="metric bad" data-probe-fig="known-others">
+            <span class="num">—</span>
+            <span class="sub"></span>
+            <span class="lbl">Known marked others</span>
+          </div>
+          <div class="metric bad" data-probe-fig="misidentified">
+            <span class="num">—</span>
+            <span class="sub"></span>
+            <span class="lbl">Misidentified</span>
+          </div>
+        </div>
+        <div class="list-tools">
+          <div class="seg" role="group" aria-label="Which photos">
+            <button type="button" data-list-source="probe" aria-pressed="true">Probes</button>
+            <button type="button" data-list-source="validation" aria-pressed="false">Validation</button>
+            <button type="button" data-list-source="test" aria-pressed="false">Test</button>
+          </div>
+          <div class="seg" role="group" aria-label="Outcome">
+            <button type="button" data-list-filter="all" aria-pressed="true">All</button>
+            <button type="button" data-list-filter="kept" aria-pressed="false">Kept</button>
+            <button type="button" data-list-filter="discarded" aria-pressed="false">Discarded</button>
+            <button type="button" data-list-filter="misidentified" aria-pressed="false">Misidentified</button>
+          </div>
+          <label>
+            Sort
+            <select data-list-sort>
+              <option value="problems">Problems first</option>
+              <option value="confidence">Confidence, high first</option>
+              <option value="distance">Distance, high first</option>
+              <option value="added">As added</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">Teal is kept. Amber is others. Gray is uncertain. Red is a wrong class the filters still accepted, including an unknown photo that was not marked others.</p>
+        <p class="hint" data-probe-note></p>
+        <div class="grid" data-probes></div>
+        <button type="button" class="ghost" data-list-more hidden>Show more</button>
+      </section>
+      <p class="hint" data-status>Loading scores…</p>
+    </section>
+
+    <dialog class="viewer" data-open-viewer>
+      <div class="section-head">
+        <h2 data-open-title>Photo</h2>
+        <div class="viewer-nav">
+          <button type="button" class="ghost" data-open-prev>Prev</button>
+          <button type="button" class="ghost" data-open-next>Next</button>
+          <button type="button" class="ghost" data-open-close>Close</button>
+        </div>
+      </div>
+      <div class="viewer-layout">
+        <figure>
+          <img alt="" data-open-image>
+          <figcaption data-open-caption></figcaption>
+        </figure>
+      </div>
+    </dialog>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Pipeline{% endblock %}
+{% block watch %}yes{% endblock %}
+{% block body %}
+  <div class="page-head">
+    <h1>Pipeline</h1>
+    <p>Wire belt checks and checkpoints into the order production should run. A frame follows the wires. Two wires into one card is a join, so a later model can put a can back into the sort pile. Score once. After that, moving a card, a cut, or a confidence mark does not score again. Fit uses validation only. Test does not pick a cut. This page does not change the 0.85 hold.</p>
+  </div>
+
+  <section class="panel">
+    <h2>Dataset</h2>
+    {% if data_roots %}
+      <form method="get" class="form-grid" action="{{ url_for('pipeline_page') }}">
+        <label class="span-2">
+          Dataset
+          <select name="data" onchange="this.form.submit()">
+            {% for name in data_roots %}
+              <option value="{{ name }}" {% if name == selected_data %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
+      <form id="pipeline-score" method="post" action="{{ url_for('start_job') }}">
+        <input type="hidden" name="kind" value="pipeline">
+        <input type="hidden" name="data_dir" value="{{ selected_data }}">
+        <div data-score-models></div>
+        <div class="buttons">
+          <button type="submit" data-score-button>Score</button>
+        </div>
+      </form>
+      <p class="hint" data-score-note>
+        {% if belt_ready %}
+          Belt numbers for <code>{{ selected_data }}</code> are on disk.
+        {% else %}
+          Belt numbers for <code>{{ selected_data }}</code> are not scored yet.
+        {% endif %}
+        A checkpoint card says so when its scores are missing.
+      </p>
+    {% else %}
+      <p class="hint">Put a dataset folder next to the lab.</p>
+    {% endif %}
+  </section>
+
+  <section
+    class="panel"
+    data-pipeline
+    data-dataset="{{ selected_data }}"
+    data-default-model="{{ selected_model }}"
+    data-belt-ready="{{ 'yes' if belt_ready else 'no' }}"
+    data-belt-url="{{ url_for('pipeline_belt', data=selected_data) }}"
+    data-model-url="{{ url_for('pipeline_model', data=selected_data) }}"
+    data-save-url="{{ url_for('save_pipeline_graph') }}"
+    data-graph-url="{{ url_for('pipeline_graph', name='NAME') }}"
+  >
+    <div class="flow-toolbar">
+      <div class="buttons">
+        <button type="button" data-add="belt">Add belt check</button>
+        <button type="button" data-add="model">Add model</button>
+        <button type="button" data-add="merge">Add merge</button>
+        <button type="button" data-add="sink">Add sink</button>
+        <button type="button" class="ghost" data-add="input">Add input</button>
+        <button type="button" class="ghost" data-tidy>Tidy</button>
+      </div>
+      <form class="flow-save" data-save-form>
+        <label>
+          Saved graph
+          <select data-graph-pick>
+            <option value="">Draft on this computer</option>
+            {% for name in graphs %}
+              <option value="{{ name }}">{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Name
+          <input type="text" name="graph_name" value="starter" maxlength="60" data-graph-name>
+        </label>
+        <button type="submit">Save</button>
+      </form>
+    </div>
+    <p class="hint" data-flow-note>Click an output, then the next card’s input. Click a wire to remove it. An unwired output is a dropped pile.</p>
+    <div class="flow-layout">
+      <div class="flow-board" data-board>
+        <div class="flow-canvas" data-canvas>
+          <svg class="flow-svg" data-wires></svg>
+        </div>
+      </div>
+      <aside class="flow-inspector" data-inspector>
+        <p class="hint">Select a card.</p>
+      </aside>
+    </div>
+  </section>
+
+  <section class="panel" data-results>
+    <div class="decide-bar">
+      <div class="seg" role="group" aria-label="Split">
+        <button type="button" data-split-value="validation" aria-pressed="true">Validation</button>
+        <button type="button" data-split-value="test" aria-pressed="false">Test</button>
+        <button type="button" data-split-value="both" aria-pressed="false">Both</button>
+        <button type="button" data-split-value="probe" aria-pressed="false">Probes</button>
+        <button type="button" data-split-value="garbage" aria-pressed="false">Garbage</button>
+      </div>
+      <p class="hint" data-split-note></p>
+    </div>
+    <div class="metrics" data-figures></div>
+    <p class="hint" data-list-note>Click a port to list the photos that left through it.</p>
+    <div class="grid" data-photos></div>
+    <button type="button" class="ghost" data-list-more hidden>Show more</button>
+    <h2>Recipe</h2>
+    <div data-recipe></div>
+  </section>
+
+  <dialog class="viewer" data-viewer>
+    <div class="section-head">
+      <h2 data-view-title>Photo</h2>
+      <button type="button" class="ghost" data-view-close>Close</button>
+    </div>
+    <div class="viewer-layout">
+      <figure>
+        <img alt="" data-view-image>
+        <figcaption data-view-caption></figcaption>
+      </figure>
+      <div data-view-detail></div>
+    </div>
+  </dialog>
+
+  <script type="application/json" id="pipeline-checks">{{ checks|tojson }}</script>
+  <script type="application/json" id="pipeline-models">{{ model_choices|tojson }}</script>
+  <script type="application/json" id="pipeline-scored">{{ scored_models|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='pipeline.js') }}?v=2"></script>
+{% endblock %}

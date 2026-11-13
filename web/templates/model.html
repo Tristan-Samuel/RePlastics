@@ -12,11 +12,19 @@
       <p class="hint">{{ model.role }}</p>
       {% if model.warning %}<p class="warn-line">{{ model.warning }}</p>{% endif %}
     </div>
-    <p class="scores">
-      {{ metric("Validation", model.metrics.validation) }}
-      {{ metric("Balanced", model.metrics.balanced) }}
-      {{ metric("Test", model.metrics.test) }}
-    </p>
+    {% if model.metrics.validation is not none or model.metrics.balanced is not none or model.metrics.test is not none %}
+      <p class="scores">
+        {{ metric("Validation", model.metrics.validation) }}
+        {{ metric("Balanced", model.metrics.balanced) }}
+        {{ metric("Test", model.metrics.test) }}
+      </p>
+    {% elif model.classes %}
+      <p class="scores">
+        <span class="score"><span class="k">Classes</span> {{ model.classes|join(', ') }}</span>
+        {% if model.parity_accuracy is not none %}{{ metric("Parity", model.parity_accuracy) }}{% endif %}
+      </p>
+      {% if model.parity_label %}<p class="hint">Parity is {{ model.parity_label }}. It is not this lab's belt split.</p>{% endif %}
+    {% endif %}
   </header>
 
   <div class="tabs" role="tablist" data-tabs data-default-tab="{{ default_tab }}">
@@ -360,7 +368,7 @@
       data-endpoint="{{ url_for('dataset_images', name=default_data) }}"
     >
       <h2>Photos</h2>
-      <p class="hint">Search a filename, or click a plot below. A plot opens the dataset photo when the name identifies one file, and otherwise lists every match.</p>
+      <p class="hint">Search a filename, or click a plot below. A plot opens the dataset photo when the name identifies one file, and otherwise lists every match. Open a photo to run Grad-CAM on it.</p>
       <div class="filters">
         <label>
           Filename
@@ -435,6 +443,12 @@
         </figure>
       </div>
       <p class="hint" data-viewer-note></p>
+      <form method="post" action="{{ url_for('start_job') }}" data-gradcam hidden>
+        <input type="hidden" name="kind" value="gradcam">
+        <input type="hidden" name="model" value="{{ model.rel }}">
+        <input type="hidden" name="images" value="" data-gradcam-path>
+        <button type="submit">Run Grad-CAM</button>
+      </form>
       <div class="grid" data-viewer-hits></div>
     </dialog>
 
@@ -471,6 +485,24 @@
           <button class="ghost">Show the written record</button>
         </form>
       {% endif %}
+      <h3>Grad-CAM</h3>
+      <form method="post" action="{{ url_for('start_job') }}" class="form-grid" enctype="multipart/form-data" data-gradcam-upload>
+        <input type="hidden" name="kind" value="gradcam">
+        <input type="hidden" name="model" value="{{ model.rel }}">
+        <label class="span-2">
+          Image file
+          <input type="file" name="photo" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp">
+        </label>
+        <label class="span-2">
+          Or a path in this repo
+          <input name="images" placeholder="one image file">
+        </label>
+        <p class="hint span-2" data-gradcam-need hidden>Choose a file or paste a path.</p>
+        <div class="span-2 buttons">
+          <button>Run Grad-CAM</button>
+        </div>
+      </form>
+      <p class="hint">Any JPEG, PNG, or WebP, including a photo that is not in the dataset. Up to 32 files. The figure shows up in Analysis when the job finishes.</p>
       <form method="post" action="{{ url_for('start_job') }}" class="form-grid">
         <input type="hidden" name="model" value="{{ model.rel }}">
         <label>
@@ -505,7 +537,7 @@
           <button name="kind" value="mistakes">Mistakes only</button>
         </div>
       </form>
-      <p class="hint">Eval and analytics write under <code>analysis/{{ model.stem }}/</code>. {% if model.frozen %}A blank threshold keeps the belt stage 1 hold.{% else %}A blank threshold leaves every frame on its winning class.{% endif %}</p>
+      <p class="hint">Eval and analytics write under <code>analysis/{{ model.stem }}/</code>. Image paths with cam checked run Grad-CAM on each of those files, including a photo outside a class folder. {% if model.frozen %}A blank threshold keeps the belt stage 1 hold.{% else %}A blank threshold leaves every frame on its winning class.{% endif %}</p>
       <div class="buttons">
         <form method="post" action="{{ url_for('start_job') }}">
           <input type="hidden" name="kind" value="confidence">

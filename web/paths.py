@@ -8,7 +8,7 @@ DOWNLOADS = Path.home() / "Downloads"
 BELT_ZIP = DOWNLOADS / "belt_stage1_224.zip"
 JOB_LOGS = ROOT / "web" / "job-logs"
 
-DATA_ROOTS = ("data", "data_real", "data_sep16", "data_belt_stage1")
+DATA_ROOTS = ("data", "data_real", "data_sep16", "data_belt_stage1", "data_belt_oct23")
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 RESINS = ("HDPE", "PET", "PP", "OTHERS")
 

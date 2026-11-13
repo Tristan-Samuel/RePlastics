@@ -125,7 +125,8 @@ def train_transform():
 
     ImageNet and the current 99% checkpoint used a random resized crop.
     Scale stays at least 60% of the photo so a bottle on the belt is not
-    cropped away. Eval and production still use the full-frame 224×224
+    cropped away. Brightness and contrast each move by up to 20%.
+    Hue stays put. Eval and production still use the full-frame 224×224
     resize in inference_transform.
     """
     return transforms.Compose(
@@ -137,6 +138,7 @@ def train_transform():
             ),
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(15),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=IMAGENET_MEAN,

@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from web.catalog import model_by_rel
-from web.paths import BELT_ZIP, DATA_ROOTS, ROOT
+from web.paths import BELT_ZIP, DATA_ROOTS, IMAGE_SUFFIXES, ROOT
 
 UNFREEZE = ("fc", "layer4", "layer3", "all")
 GPUS = ("T4", "L4", "A100")
@@ -154,25 +154,32 @@ def _steps(form):
     return ",".join(picked)
 
 
-def _extra_images(form, data_dir):
+def _listed_images(form, limit=8):
     text = (form.get("images") or "").strip()
-    if text:
-        paths = text.split()
-        if len(paths) > 8:
-            raise CommandError("Pass at most 8 image paths.")
-        cleaned = []
-        for raw in paths:
-            path = Path(raw)
-            if path.is_absolute() or ".." in path.parts:
-                raise CommandError(f"Image path has to stay in the repo: {raw}")
-            resolved = (ROOT / path).resolve()
-            try:
-                resolved.relative_to(ROOT)
-            except ValueError:
-                raise CommandError(f"Image path has to stay in the repo: {raw}")
-            if not resolved.exists() or resolved.suffix == ".pt":
-                raise CommandError(f"Not a usable image path: {raw}")
-            cleaned.append(path.as_posix())
+    if not text:
+        return []
+    paths = text.split()
+    if len(paths) > limit:
+        raise CommandError(f"Pass at most {limit} image paths.")
+    cleaned = []
+    for raw in paths:
+        path = Path(raw)
+        if path.is_absolute() or ".." in path.parts:
+            raise CommandError(f"Image path has to stay in the repo: {raw}")
+        resolved = (ROOT / path).resolve()
+        try:
+            resolved.relative_to(ROOT)
+        except ValueError:
+            raise CommandError(f"Image path has to stay in the repo: {raw}")
+        if not resolved.exists() or resolved.suffix == ".pt":
+            raise CommandError(f"Not a usable image path: {raw}")
+        cleaned.append(path.as_posix())
+    return cleaned
+
+
+def _extra_images(form, data_dir):
+    cleaned = _listed_images(form)
+    if cleaned:
         return cleaned
     if _flag(form, "both_splits"):
         folders = []
@@ -247,14 +254,24 @@ def prepare(form, require_confirm=True):
         return _prepare_train(form, require_confirm)
     if kind == "onnx":
         return _prepare_onnx(form)
+    if kind == "onnx-check":
+        return _prepare_onnx_check(form)
     if kind == "eval":
         return _prepare_eval(form)
     if kind == "analyze":
         return _prepare_analyze(form)
+    if kind == "gradcam":
+        return _prepare_gradcam(form)
     if kind == "mistakes":
         return _prepare_mistakes(form)
     if kind == "confidence":
         return _prepare_confidence(form, require_confirm)
+    if kind == "open-set":
+        return _prepare_open_set(form, require_confirm)
+    if kind == "presence":
+        return _prepare_presence(form, require_confirm)
+    if kind == "pipeline":
+        return _prepare_pipeline(form, require_confirm)
     if kind == "split":
         return _prepare_split(form, require_confirm)
     if kind == "belt-zip":
@@ -264,29 +281,42 @@ def prepare(form, require_confirm=True):
     raise CommandError("Unknown action.")
 
 
-def _prepare_onnx(form):
-    data_dir = _data_dir(form.get("data_dir") or "data_belt_stage1")
-    argv = [
+def _onnx_argv(model, data_dir, check_only=False):
+    model_text = _model_path(
+        model or "models/resnext50_metal_plastic.pt",
+        must_exist=True,
+    )
+    folder = _data_dir(data_dir or "data_belt_stage1")
+    out = Path(model_text).with_suffix(".onnx").as_posix()
+    return [
         _python(),
         "export_onnx.py",
-        "--check",
+        "--model",
+        model_text,
+        "--out",
+        out,
+        "--check-only" if check_only else "--check",
         "--data-dir",
-        data_dir,
+        folder,
     ]
+
+
+def _prepare_onnx(form):
+    argv = _onnx_argv(form.get("model"), form.get("data_dir"))
     return Prepared(argv, "Export ONNX", display_argv(argv), False, "")
 
 
-def onnx_display(data_dir="data_belt_stage1"):
+def _prepare_onnx_check(form):
+    argv = _onnx_argv(form.get("model"), form.get("data_dir"), check_only=True)
+    out = argv[argv.index("--out") + 1]
+    if not (ROOT / out).is_file():
+        raise CommandError(f"No ONNX file at {out}. Make ONNX first.")
+    return Prepared(argv, "Check ONNX", display_argv(argv), False, "")
+
+
+def onnx_display(model="models/resnext50_metal_plastic.pt", data_dir="data_belt_stage1"):
     """The export line, quoted for this machine's shell."""
-    return display_argv(
-        [
-            _python(),
-            "export_onnx.py",
-            "--check",
-            "--data-dir",
-            data_dir,
-        ]
-    )
+    return display_argv(_onnx_argv(model, data_dir))
 
 
 def _pct(value):
@@ -324,6 +354,10 @@ def _checkpoint_note(model_text, where, drive):
         f"test {_pct(metrics.get('test'))}."
     )
     lines.append(model["role"])
+    lines.append(
+        "Start makes one copy and trains that copy. "
+        "The file you picked stays. A second copy is not written."
+    )
     if where == "colab":
         lines.append(
             "Those bytes are uploaded from this computer. "
@@ -331,13 +365,6 @@ def _checkpoint_note(model_text, where, drive):
         )
         if drive:
             lines.append(_photo_note())
-        lines.append(
-            "The trained file is saved under a new name. This starting file stays."
-        )
-    else:
-        lines.append(
-            "Start copies this file and trains the copy. This starting file stays."
-        )
     return " ".join(lines)
 
 
@@ -360,9 +387,16 @@ def _prepare_train(form, require_confirm):
     where = (form.get("where") or "local").strip()
     resume = _flag(form, "resume")
     model_text = _model_path(form.get("model"), must_exist=resume)
-    note = _checkpoint_note(model_text, where, _flag(form, "drive")) if resume else ""
-    if where == "local" and require_confirm and resume:
-        model_text = _copy_for_run(model_text)
+    will_copy = (ROOT / model_text).is_file()
+    note = _checkpoint_note(model_text, where, _flag(form, "drive")) if will_copy else ""
+    copied_from = ""
+    if where == "colab":
+        _require_t4()
+    if require_confirm:
+        _confirmed(form, True if where == "colab" else will_copy)
+        if will_copy:
+            copied_from = model_text
+            model_text = _copy_for_run(model_text)
     train_args = _train_args(form, model_text)
     if where == "local":
         data_dir = _data_dir(form.get("data_dir"))
@@ -373,16 +407,18 @@ def _prepare_train(form, require_confirm):
             "--data-dir",
             data_dir,
         ]
+        display = display_argv(argv)
+        if copied_from:
+            display = f"Copied {copied_from} to {model_text}\n{display}"
         return Prepared(
             argv,
             "Train on this computer",
-            display_argv(argv),
-            resume,
+            display,
+            will_copy,
             note,
         )
     if where != "colab":
         raise CommandError("Pick the T4 or this computer.")
-    _require_t4()
     gpu = (form.get("gpu") or "T4").strip()
     if gpu not in GPUS:
         raise CommandError("GPU has to be T4, L4, or A100.")
@@ -394,10 +430,13 @@ def _prepare_train(form, require_confirm):
     else:
         data_dir = _data_dir(form.get("data_dir"))
         argv += ["--data-dir", data_dir]
+    if copied_from:
+        argv += ["--out", model_text]
     argv += train_args
-    if require_confirm:
-        _confirmed(form, True)
-    return Prepared(argv, "Train on T4", display_argv(argv), True, note or "This starts a Colab GPU session and runs training. Continue?")
+    display = display_argv(argv)
+    if copied_from:
+        display = f"Copied {copied_from} to {model_text}\n{display}"
+    return Prepared(argv, "Train on T4", display, True, note or "This starts a Colab GPU session and runs training. Continue?")
 
 
 def _prepare_eval(form):
@@ -441,6 +480,36 @@ def _prepare_analyze(form):
     else:
         argv += ["--data-dir", data_dir]
     return Prepared(argv, "Analytics", display_argv(argv), False, "")
+
+
+def _prepare_gradcam(form):
+    model_text = _model_path(form.get("model"), must_exist=True)
+    images = _listed_images(form, limit=32)
+    if not images:
+        raise CommandError("Choose an image, or paste a path inside this repo.")
+    for raw in images:
+        path = ROOT / raw
+        if path.is_dir():
+            raise CommandError(
+                "Grad-CAM takes image files. Use full analytics for a folder."
+            )
+        if path.suffix.lower() not in IMAGE_SUFFIXES:
+            raise CommandError(f"Not an image: {raw}")
+    out = _run_dir(model_text)
+    argv = [
+        _python(),
+        "analyze.py",
+        "--no-show",
+        "--model",
+        model_text,
+        "--out",
+        out,
+        "--steps",
+        "cam",
+        "--images",
+        *images,
+    ]
+    return Prepared(argv, "Grad-CAM", display_argv(argv), False, "")
 
 
 def _prepare_mistakes(form):
@@ -525,6 +594,95 @@ def _prepare_confidence(form, require_confirm):
     )
 
 
+def _prepare_open_set(form, require_confirm):
+    model_text = _model_path(form.get("model"), must_exist=True)
+    data_dir = _data_dir(form.get("data_dir") or "data_belt_stage1")
+    stem = Path(model_text).stem
+    out = f"analysis/{stem}/open-set"
+    marker = ROOT / out / "test_scored.txt"
+    argv = [
+        _python(),
+        "open_set.py",
+        "--model",
+        model_text,
+        "--data-dir",
+        data_dir,
+        "--out",
+        out,
+    ]
+    needs = marker.is_file()
+    message = ""
+    if needs:
+        argv.append("--rerun-test")
+        message = "This scores the locked test split again. Continue?"
+        if require_confirm:
+            _confirmed(form, True)
+    return Prepared(argv, "Open set", display_argv(argv), needs, message)
+
+
+def _prepare_presence(form, require_confirm):
+    model_text = _model_path(form.get("model"), must_exist=True)
+    data_dir = _data_dir(form.get("data_dir") or "data_belt_stage1")
+    stem = Path(model_text).stem
+    out = f"analysis/{stem}/presence"
+    marker = ROOT / out / "test_scored.txt"
+    argv = [
+        _python(),
+        "presence.py",
+        "--model",
+        model_text,
+        "--data-dir",
+        data_dir,
+        "--blanks",
+        "data/probes/blanks",
+        "--out",
+        out,
+    ]
+    needs = marker.is_file()
+    message = ""
+    if needs:
+        argv.append("--rerun-test")
+        message = "This scores the locked test split again. Continue?"
+        if require_confirm:
+            _confirmed(form, True)
+    return Prepared(argv, "Belt presence", display_argv(argv), needs, message)
+
+
+def _form_list(form, name):
+    getter = getattr(form, "getlist", None)
+    if getter is None:
+        value = (form.get(name) or "").strip()
+        return [value] if value else []
+    return [item for item in getter(name) if (item or "").strip()]
+
+
+def _prepare_pipeline(form, require_confirm):
+    data_dir = _data_dir(form.get("data_dir") or "data_belt_stage1")
+    models = []
+    for item in _form_list(form, "model"):
+        models.append(_model_path(item, must_exist=True))
+    models = list(dict.fromkeys(models))
+    belt = ROOT / "analysis" / "pipeline-cache" / data_dir / "belt.json"
+    model_paths = [
+        ROOT / "analysis" / "pipeline-cache" / data_dir / "models" / f"{Path(rel).stem}.json"
+        for rel in models
+    ]
+    needs = belt.is_file() and all(path.is_file() for path in model_paths)
+    argv = [_python(), "pipeline.py", "--data-dir", data_dir]
+    for rel in models:
+        argv.extend(["--model", rel])
+    if not models:
+        argv.append("--belt-only")
+    message = ""
+    if needs:
+        argv.append("--rerun")
+        message = "This scores these photos again and replaces the cache. Continue?"
+        if require_confirm:
+            _confirmed(form, True)
+    title = "Pipeline scores" if models else "Pipeline belt checks"
+    return Prepared(argv, title, display_argv(argv), needs, message)
+
+
 def _prepare_split(form, require_confirm):
     data_dir = _data_dir(form.get("data_dir"))
     argv = [_python(), "split_data.py", "--dest", data_dir]
@@ -538,14 +696,15 @@ def _prepare_split(form, require_confirm):
 
 
 def _prepare_belt_zip(form, require_confirm):
-    argv = [_python(), "build_belt_stage1.py"]
+    argv = [_python(), "build_belt_stage1.py", "--zip-only"]
     message = (
-        "This rebuilds data_belt_stage1 and "
-        "belt_stage1_224.zip in Downloads. Continue?"
+        "This zips the photos now in data_belt_stage1 into "
+        "belt_stage1_224.zip in Downloads. "
+        "removed_stage1 stays out. Continue?"
     )
     if require_confirm:
         _confirmed(form, True)
-    return Prepared(argv, "Build 224 zip", display_argv(argv), True, message)
+    return Prepared(argv, "Zip current photos", display_argv(argv), True, message)
 
 
 def _prepare_stop(form, require_confirm):
