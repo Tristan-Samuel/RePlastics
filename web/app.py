@@ -34,6 +34,7 @@ from web.paths import (
     analysis_dir_allowed,
     image_allowed,
     is_relative_inside,
+    resolve_image,
     reveal_allowed,
 )
 from web.presets import PRESETS
@@ -407,8 +408,8 @@ def create_app():
 
     @app.get("/files/<path:rel>")
     def files(rel):
-        path = ROOT / rel
-        if not image_allowed(path):
+        path = resolve_image(rel)
+        if path is None:
             abort(404)
         return send_file(path)
 
